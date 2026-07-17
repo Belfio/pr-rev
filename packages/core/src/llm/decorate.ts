@@ -21,19 +21,25 @@ export async function decorateTile(llm: LlmClient, tile: Tile): Promise<string> 
   }));
   const edgeList = tile.edges.map((e) => `${e.source} -> ${e.target} (${e.weight} imports)`);
 
-  const prompt = `Diagram level: "${tile.tileId}" (${tile.title}) of repo ${tile.repo.owner}/${tile.repo.name}.
+  const isFlow = tile.kind === "flow";
+  const prompt = `Diagram (kind: ${tile.kind}): "${tile.tileId}" (${tile.title}) of repo ${tile.repo.owner}/${tile.repo.name}.
+${isFlow ? "This is a FLOW diagram: it was statically traced from an application entrypoint through real import edges. The entrypoint is the node with kind \"service\"." : ""}
 
 NODES:
 ${JSON.stringify(nodeList, null, 1)}
 
-EDGES (aggregated imports):
+EDGES (${isFlow ? "traced dependency flow" : "aggregated imports"}):
 ${edgeList.join("\n") || "(none)"}
 
 Return JSON:
 {
   "title": "short human title for this diagram level",
   "nodeSummaries": { "<nodeId>": "one-line summary of what this module/file is for", ... },
-  "explanationMarkdown": "2-4 short markdown paragraphs explaining this level to a reviewer: what lives here, how the pieces relate (only relationships present in EDGES), and what to pay attention to. Use plain language."
+  "explanationMarkdown": ${
+    isFlow
+      ? '"2-4 short markdown paragraphs narrating this flow for a reviewer: what the entrypoint serves, which layers the request/render passes through (following only EDGES), and where the risky/central pieces are."'
+      : '"2-4 short markdown paragraphs explaining this level to a reviewer: what lives here, how the pieces relate (only relationships present in EDGES), and what to pay attention to. Use plain language."'
+  }
 }
 Only use node ids that appear in NODES.`;
 
@@ -41,7 +47,10 @@ Only use node ids that appear in NODES.`;
   const parsed = parseJson<DecorationResult>(raw);
   if (!parsed) return fallbackExplanation(tile);
 
-  if (parsed.title && typeof parsed.title === "string") tile.title = tile.parentTileId ? parsed.title : tile.title;
+  // keep root and flow titles stable (flow titles appear in the view switcher)
+  if (parsed.title && typeof parsed.title === "string" && tile.parentTileId && tile.kind !== "flow") {
+    tile.title = parsed.title;
+  }
   const validIds = new Set(tile.nodes.map((n) => n.id));
   for (const [id, summary] of Object.entries(parsed.nodeSummaries ?? {})) {
     if (!validIds.has(id) || typeof summary !== "string") continue; // validate-and-drop

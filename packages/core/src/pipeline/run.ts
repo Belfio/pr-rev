@@ -3,6 +3,7 @@ import path from "node:path";
 import { resolvePr, cloneAtSha } from "./github.js";
 import { scanImports } from "./imports.js";
 import { buildDirTree, buildTiles } from "./tiles.js";
+import { buildFlowTiles } from "./flows.js";
 import { layoutTile } from "./layout.js";
 import { buildOverlay } from "./overlay.js";
 import { createLlmClient, pMap } from "../llm/client.js";
@@ -53,13 +54,17 @@ export async function analyze(opts: AnalyzeOptions): Promise<void> {
   const tree = buildDirTree(graph.files);
   const repoMeta = { owner: opts.owner, name: opts.repo, commitSha: pr.mergeBaseSha };
   const build = buildTiles(tree, graph, repoMeta, coverage);
-  log(`  ${build.tiles.length} tiles`);
+
+  const changedFiles = new Set(pr.files.map((f) => f.filename));
+  const flowBuild = buildFlowTiles(graph, build, changedFiles, repoMeta, coverage);
+  build.tiles.push(...flowBuild.tiles);
+  log(`  ${build.tiles.length} tiles (${flowBuild.tiles.length} flows)`);
 
   log("Computing layouts (ELK)...");
   for (const tile of build.tiles) await layoutTile(tile);
 
   log("Building PR overlay...");
-  const overlayBuild = buildOverlay(pr, build);
+  const overlayBuild = buildOverlay(pr, build, flowBuild.membership);
   log(`  ${overlayBuild.overlays.size} touched tiles`);
 
   // --- LLM passes (concurrent per tile) ---
@@ -155,6 +160,7 @@ export async function analyze(opts: AnalyzeOptions): Promise<void> {
     repo: repoMeta,
     rootTileId: build.rootTileId,
     tileIds: build.tiles.map((t) => t.tileId),
+    flows: flowBuild.flows,
     coverage,
     generatedAt: new Date().toISOString(),
   };

@@ -48,7 +48,11 @@ function tileAncestry(tileId: string): string[] {
   return parts.map((_, i) => parts.slice(0, i + 1).join("/"));
 }
 
-export function buildOverlay(pr: PrInfo, build: TileBuild): OverlayBuild {
+export function buildOverlay(
+  pr: PrInfo,
+  build: TileBuild,
+  flowMembership?: Map<string, { tileId: string; nodeId: string }[]>,
+): OverlayBuild {
   const overlays = new Map<string, TileOverlay>();
   const patches = new Map<string, string>();
   const counts = new Map<string, { added: number; modified: number; removed: number }>();
@@ -113,6 +117,16 @@ export function buildOverlay(pr: PrInfo, build: TileBuild): OverlayBuild {
     const status = normalizeStatus(f.status);
     if (!status) continue;
     if (f.patch) patches.set(escapePath(f.filename), f.patch);
+
+    // flow tiles: mark the file's node in every flow that traverses it
+    const flowEntries = flowMembership?.get(
+      status === "renamed" && f.previousFilename ? f.previousFilename : f.filename,
+    );
+    for (const { tileId, nodeId } of flowEntries ?? []) {
+      if (status === "removed") overlay(tileId).removedNodeIds.push(nodeId);
+      else setNode(tileId, nodeId, { status, hunkRefs: hunkRefFor(f) });
+      bump(tileId, status);
+    }
 
     const lookupPath = status === "renamed" && f.previousFilename ? f.previousFilename : f.filename;
     const entries = build.fileToNodes.get(lookupPath);

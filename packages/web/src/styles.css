@@ -604,3 +604,39 @@ body {
   opacity: 0.4;
   cursor: default;
 }
+
+/* ---------- view switcher ---------- */
+.view-switcher {
+  display: flex;
+  gap: 6px;
+  padding: 8px 12px 0;
+  background: var(--bg-raised);
+  overflow-x: auto;
+  flex-wrap: nowrap;
+  scrollbar-width: thin;
+}
+
+.view-tab {
+  background: none;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 8px 8px 0 0;
+  color: var(--text-dim);
+  font-size: 12px;
+  padding: 5px 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.view-tab:hover {
+  color: var(--text);
+}
+
+.view-tab-active {
+  color: var(--accent);
+  border-color: var(--accent);
+  font-weight: 600;
+}

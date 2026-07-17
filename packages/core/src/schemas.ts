@@ -109,6 +109,7 @@ export const AnalysisManifest = z.object({
   repo: z.object({ owner: z.string(), name: z.string(), commitSha: z.string() }),
   rootTileId: z.string(),
   tileIds: z.array(z.string()),
+  flows: z.array(z.object({ tileId: z.string(), title: z.string() })).default([]),
   coverage: z.object({
     analyzedFiles: z.number().int(),
     eligibleFiles: z.number().int(),

@@ -68,6 +68,13 @@ export interface TileOverlay {
   explanationUri: string | null;
 }
 
+export interface AnalysisManifest {
+  rootTileId: string;
+  tileIds: string[];
+  flows: { tileId: string; title: string }[];
+  coverage: { analyzedFiles: number; eligibleFiles: number; unresolvedImports: number };
+}
+
 export interface OverlayManifest {
   pr: { number: number; title: string; baseSha: string; headSha: string; author: string; url: string };
   touchedTiles: Record<string, { status: string; counts: { added: number; modified: number; removed: number } }>;
@@ -78,6 +85,7 @@ const tf = (tileId: string) => tileId.replaceAll("/", "__");
 
 export const keys = {
   reviews: () => ["reviews"] as const,
+  manifest: (r: Review) => ["manifest", r.owner, r.repo, r.baseSha] as const,
   tile: (r: Review, tileId: string) => ["tile", r.owner, r.repo, r.baseSha, tileId] as const,
   tileMd: (r: Review, tileId: string) => ["tileMd", r.owner, r.repo, r.baseSha, tileId] as const,
   overlayManifest: (r: Review) => ["ovm", r.owner, r.repo, r.prNumber, r.headSha] as const,
@@ -118,6 +126,7 @@ async function fetchJsonOrNull<T>(url: string): Promise<T | null> {
 
 export const api = {
   reviews: () => fetchJson<Review[]>("/api/reviews"),
+  manifest: (r: Review) => fetchJson<AnalysisManifest>(`/api/artifacts/${aPrefix(r)}/manifest.json`),
   tile: (r: Review, tileId: string) =>
     fetchJson<Tile>(`/api/artifacts/${aPrefix(r)}/tiles/${tf(tileId)}.json`),
   tileMd: (r: Review, tileId: string) =>

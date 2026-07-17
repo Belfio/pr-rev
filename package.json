@@ -1,0 +1,16 @@
+{
+  "name": "pr-rev",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "analyze": "pnpm --filter @pr-rev/core analyze",
+    "dev": "pnpm --parallel --filter @pr-rev/functions --filter @pr-rev/web dev",
+    "typecheck": "pnpm -r typecheck"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": ["esbuild"]
+  }
+}

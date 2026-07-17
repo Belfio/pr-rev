@@ -5,6 +5,7 @@ import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createLlmClient } from "@pr-rev/core";
 import { buildChatContext } from "./chat-context.js";
+import { getPrMeta, postPrComment } from "./github-live.js";
 
 const ROOT = path.resolve(import.meta.dirname, "../../..");
 const ARTIFACTS = process.env.ARTIFACTS_DIR ?? path.join(ROOT, "artifacts");
@@ -50,6 +51,32 @@ app.get("/api/artifacts/*", async (c) => {
     return c.body(data);
   } catch {
     return c.text("not found", 404);
+  }
+});
+
+// live PR metadata (title, body, comments) — proxied from GitHub, never cached in artifacts
+app.get("/api/pr/:owner/:repo/:number", async (c) => {
+  try {
+    const meta = await getPrMeta(c.req.param("owner"), c.req.param("repo"), Number(c.req.param("number")));
+    c.header("Cache-Control", "no-store");
+    return c.json(meta);
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 400);
+  }
+});
+
+app.post("/api/pr/:owner/:repo/:number/comments", async (c) => {
+  try {
+    const { body } = (await c.req.json()) as { body: string };
+    const comment = await postPrComment(
+      c.req.param("owner"),
+      c.req.param("repo"),
+      Number(c.req.param("number")),
+      body,
+    );
+    return c.json(comment, 201);
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 400);
   }
 });
 

@@ -1,3 +1,4 @@
+import { useState } from "react";
 import Markdown from "react-markdown";
 import { useQuery } from "@tanstack/react-query";
 import { api, keys, queryDefaults } from "../lib/api";
@@ -5,9 +6,17 @@ import type { Review } from "../lib/api";
 import { useUi } from "../state/store";
 import { DiffView } from "./DiffView";
 import { Chat } from "./Chat";
+import { Conversation } from "./Conversation";
 
 export function TextPane({ review }: { review: Review }) {
+  const [tab, setTab] = useState<"review" | "conversation">("review");
   const { tileId, selectedNodeId } = useUi();
+  const metaQ = useQuery({
+    queryKey: keys.prMeta(review),
+    queryFn: () => api.prMeta(review),
+    staleTime: 30_000,
+    gcTime: 5 * 60 * 1000,
+  });
 
   const tileQ = useQuery({ queryKey: keys.tile(review, tileId), queryFn: () => api.tile(review, tileId), ...queryDefaults });
   const tileMdQ = useQuery({ queryKey: keys.tileMd(review, tileId), queryFn: () => api.tileMd(review, tileId), ...queryDefaults });
@@ -28,6 +37,21 @@ export function TextPane({ review }: { review: Review }) {
 
   return (
     <div className="text-pane">
+      <div className="pane-tabs">
+        <button className={`pane-tab ${tab === "review" ? "pane-tab-active" : ""}`} onClick={() => setTab("review")}>
+          Review
+        </button>
+        <button
+          className={`pane-tab ${tab === "conversation" ? "pane-tab-active" : ""}`}
+          onClick={() => setTab("conversation")}
+        >
+          Conversation{metaQ.data ? ` (${metaQ.data.comments.length})` : ""}
+        </button>
+      </div>
+      {tab === "conversation" ? (
+        <Conversation review={review} />
+      ) : (
+        <>
       <div className="text-scroll">
         {selectedNode ? (
           <section className="text-section">
@@ -80,6 +104,8 @@ export function TextPane({ review }: { review: Review }) {
         )}
       </div>
       <Chat review={review} />
+        </>
+      )}
     </div>
   );
 }

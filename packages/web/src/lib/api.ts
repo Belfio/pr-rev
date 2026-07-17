@@ -69,6 +69,30 @@ export interface TileOverlay {
   explanationUri: string | null;
 }
 
+export interface PrComment {
+  id: number;
+  author: string;
+  authorAvatar: string | null;
+  body: string;
+  createdAt: string;
+  kind: "discussion" | "review";
+  path: string | null;
+  line: number | null;
+}
+
+export interface PrMeta {
+  number: number;
+  title: string;
+  body: string;
+  author: string;
+  state: string;
+  draft: boolean;
+  merged: boolean;
+  url: string;
+  createdAt: string;
+  comments: PrComment[];
+}
+
 export interface AnalysisManifest {
   rootTileId: string;
   tileIds: string[];
@@ -94,6 +118,7 @@ export const keys = {
   overlayMd: (r: Review, tileId: string) => ["ovmd", r.owner, r.repo, r.prNumber, r.headSha, tileId] as const,
   prSummary: (r: Review) => ["prsum", r.owner, r.repo, r.prNumber, r.headSha] as const,
   patch: (r: Review, uri: string) => ["patch", r.owner, r.repo, r.prNumber, r.headSha, uri] as const,
+  prMeta: (r: Review) => ["prMeta", r.owner, r.repo, r.prNumber] as const,
 };
 
 const aPrefix = (r: Review) => `analysis/${r.owner}/${r.repo}/${r.baseSha}`;
@@ -142,6 +167,16 @@ export const api = {
     fetchText(`/api/artifacts/${pPrefix(r)}/overlays/pr-summary.md`),
   patch: (r: Review, patchUri: string) =>
     fetchText(`/api/artifacts/${pPrefix(r)}/${patchUri}`),
+  prMeta: (r: Review) => fetchJson<PrMeta>(`/api/pr/${r.owner}/${r.repo}/${r.prNumber}`),
+  postComment: async (r: Review, body: string): Promise<PrComment> => {
+    const res = await fetch(`/api/pr/${r.owner}/${r.repo}/${r.prNumber}/comments`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ body }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `post failed (${res.status})`);
+    return res.json();
+  },
 };
 
 /** immutable, SHA-keyed artifacts: staleTime Infinity; gcTime is the eviction policy */

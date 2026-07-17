@@ -29,6 +29,7 @@ export interface TileEdge {
   target: string;
   kind: string;
   weight: number;
+  label?: string | null;
 }
 
 export interface Tile {

@@ -9,13 +9,15 @@ export async function layoutTile(tile: Tile): Promise<void> {
     height: 64,
   });
 
+  const isFlow = tile.kind === "flow";
   const graph = {
     id: "g",
     layoutOptions: {
       "elk.algorithm": "layered",
-      "elk.direction": "RIGHT",
-      "elk.spacing.nodeNode": "36",
-      "elk.layered.spacing.nodeNodeBetweenLayers": "72",
+      // flowcharts read top-down; structure maps read left-right
+      "elk.direction": isFlow ? "DOWN" : "RIGHT",
+      "elk.spacing.nodeNode": isFlow ? "48" : "36",
+      "elk.layered.spacing.nodeNodeBetweenLayers": isFlow ? "56" : "72",
     },
     children: tile.nodes.map((n) => ({ id: n.id, ...nodeSize(n.label) })),
     edges: tile.edges.map((e) => ({ id: e.id, sources: [e.source], targets: [e.target] })),

@@ -3,7 +3,8 @@ import path from "node:path";
 import { resolvePr, cloneAtSha } from "./github.js";
 import { scanImports } from "./imports.js";
 import { buildDirTree, buildTiles } from "./tiles.js";
-import { buildFlowTiles } from "./flows.js";
+import { buildFlowSpecs, assembleExtractedFlow, assembleFallbackFlow } from "./flows.js";
+import { extractFlow } from "../llm/flow-extract.js";
 import { layoutTile } from "./layout.js";
 import { buildOverlay } from "./overlay.js";
 import { createLlmClient, pMap } from "../llm/client.js";
@@ -56,15 +57,44 @@ export async function analyze(opts: AnalyzeOptions): Promise<void> {
   const build = buildTiles(tree, graph, repoMeta, coverage);
 
   const changedFiles = new Set(pr.files.map((f) => f.filename));
-  const flowBuild = buildFlowTiles(graph, build, changedFiles, repoMeta, coverage);
-  build.tiles.push(...flowBuild.tiles);
-  log(`  ${build.tiles.length} tiles (${flowBuild.tiles.length} flows)`);
+  const specs = buildFlowSpecs(graph, changedFiles);
+
+  log(`Extracting ${specs.length} flows${opts.skipLlm ? " (deterministic fallback)" : " (LLM, from source)"}...`);
+  const assembled = await pMap(
+    specs,
+    async (spec) => {
+      if (!opts.skipLlm) {
+        try {
+          const extracted = await extractFlow(llm, repoDir, spec.entry, spec.reachable, spec.title);
+          if (extracted) return assembleExtractedFlow(spec, extracted, build, repoMeta, coverage);
+          log(`  ! flow ${spec.title}: extraction invalid, using dependency fallback`);
+        } catch (e) {
+          log(`  ! flow ${spec.title}: ${(e as Error).message} — using dependency fallback`);
+        }
+      }
+      return assembleFallbackFlow(spec, graph, build, changedFiles, repoMeta, coverage);
+    },
+    opts.concurrency ?? 6,
+  );
+  build.tiles.push(...assembled.map((a) => a.tile));
+  const flowMembership = new Map<string, { tileId: string; nodeId: string }[]>();
+  for (const a of assembled) {
+    for (const m of a.membership) {
+      if (!flowMembership.has(m.file)) flowMembership.set(m.file, []);
+      flowMembership.get(m.file)!.push({ tileId: m.tileId, nodeId: m.nodeId });
+    }
+  }
+  const flowList = specs.map((s) => ({ tileId: s.tileId, title: s.title }));
+  const flowExplanations = new Map(
+    assembled.filter((a) => a.explanation).map((a) => [a.tile.tileId, a.explanation!]),
+  );
+  log(`  ${build.tiles.length} tiles (${assembled.length} flows, ${assembled.filter((a) => a.extracted).length} LLM-extracted)`);
 
   log("Computing layouts (ELK)...");
   for (const tile of build.tiles) await layoutTile(tile);
 
   log("Building PR overlay...");
-  const overlayBuild = buildOverlay(pr, build, flowBuild.membership);
+  const overlayBuild = buildOverlay(pr, build, flowMembership);
   log(`  ${overlayBuild.overlays.size} touched tiles`);
 
   // --- LLM passes (concurrent per tile) ---
@@ -78,6 +108,11 @@ export async function analyze(opts: AnalyzeOptions): Promise<void> {
     await pMap(
       build.tiles,
       async (tile) => {
+        // extracted flow tiles already carry their step narrative from extraction
+        if (flowExplanations.has(tile.tileId)) {
+          explanations.set(tile.tileId, flowExplanations.get(tile.tileId)!);
+          return;
+        }
         try {
           explanations.set(tile.tileId, await decorateTile(llm, tile));
         } catch (e) {
@@ -160,7 +195,7 @@ export async function analyze(opts: AnalyzeOptions): Promise<void> {
     repo: repoMeta,
     rootTileId: build.rootTileId,
     tileIds: build.tiles.map((t) => t.tileId),
-    flows: flowBuild.flows,
+    flows: flowList,
     coverage,
     generatedAt: new Date().toISOString(),
   };

@@ -640,3 +640,24 @@ body {
   border-color: var(--accent);
   font-weight: 600;
 }
+
+/* ---------- flow step nodes ---------- */
+.tile-node.kind-decision {
+  border-radius: 18px;
+  border-style: solid;
+  background: #22262e;
+}
+
+.tile-node.kind-screen {
+  border-radius: 2px;
+  border-width: 2px;
+}
+
+.tile-node.kind-external,
+.tile-node.kind-datastore {
+  border-style: dotted;
+}
+
+.react-flow__edge-textbg {
+  fill: var(--bg);
+}

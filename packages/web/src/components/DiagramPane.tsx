@@ -7,6 +7,7 @@ import {
   ReactFlowProvider,
   Handle,
   Position,
+  MarkerType,
   type Node,
   type Edge,
   type NodeProps,
@@ -25,6 +26,9 @@ const KIND_ICON: Record<string, string> = {
   function: "ƒ",
   datastore: "⛁",
   external: "☁",
+  screen: "▢",
+  step: "▸",
+  decision: "◇",
 };
 
 type FlowNodeData = {
@@ -33,12 +37,14 @@ type FlowNodeData = {
   changeCount: number;
   isRemoved: boolean;
   isNew: boolean;
+  vertical: boolean; // flow tiles lay out top-down
 };
 
 function TileNodeView({ data, selected }: NodeProps<Node<FlowNodeData>>) {
-  const { tileNode, status, isRemoved, isNew } = data;
+  const { tileNode, status, isRemoved, isNew, vertical } = data;
   const cls = [
     "tile-node",
+    `kind-${tileNode.kind}`,
     status ? `status-${status}` : "",
     isRemoved ? "status-removed" : "",
     isNew && !status ? "status-added" : "",
@@ -49,7 +55,7 @@ function TileNodeView({ data, selected }: NodeProps<Node<FlowNodeData>>) {
     .join(" ");
   return (
     <div className={cls} style={{ width: tileNode.pos.w || 170, minHeight: tileNode.pos.h || 64 }}>
-      <Handle type="target" position={Position.Left} className="handle" />
+      <Handle type="target" position={vertical ? Position.Top : Position.Left} className="handle" />
       <div className="node-head">
         <span className="node-icon">{KIND_ICON[tileNode.kind] ?? "▪"}</span>
         <span className="node-label" title={tileNode.label}>
@@ -58,10 +64,17 @@ function TileNodeView({ data, selected }: NodeProps<Node<FlowNodeData>>) {
         {tileNode.childTileId && <span className="drill-hint">⤵</span>}
       </div>
       <div className="node-sub">
-        {status && <span className={`badge badge-${status}`}>{status}</span>}
+        {status && (
+          <span
+            className={`badge badge-${status}`}
+            title={vertical ? "The file implementing this step is changed in this PR" : undefined}
+          >
+            {vertical && status === "modified" ? "in diff" : status}
+          </span>
+        )}
         {tileNode.stats.files > 1 && <span className="node-files">{tileNode.stats.files} files</span>}
       </div>
-      <Handle type="source" position={Position.Right} className="handle" />
+      <Handle type="source" position={vertical ? Position.Bottom : Position.Right} className="handle" />
     </div>
   );
 }
@@ -287,6 +300,7 @@ function toFlow(
   overlay: TileOverlay | null,
   manifest: OverlayManifest | null,
 ): { nodes: Node<FlowNodeData>[]; edges: Edge[] } {
+  const vertical = tile.kind === "flow";
   const nodes: Node<FlowNodeData>[] = tile.nodes.map((n) => {
     const ov = overlay?.nodes[n.id];
     // "touched child" glow only applies to true containment (map hierarchy), not to
@@ -304,6 +318,7 @@ function toFlow(
         changeCount: childTouched ? childTouched.counts.added + childTouched.counts.modified + childTouched.counts.removed : 0,
         isRemoved: removed,
         isNew: false,
+        vertical,
       },
     };
   });
@@ -323,6 +338,7 @@ function toFlow(
           changeCount: 0,
           isRemoved: status === "removed",
           isNew: true,
+          vertical,
         },
       });
     });
@@ -334,8 +350,9 @@ function toFlow(
     source: e.source,
     target: e.target,
     className: "flow-edge",
-    style: { strokeWidth: 1 + (e.weight / maxWeight) * 3 },
-    label: e.weight > 1 ? String(e.weight) : undefined,
+    style: { strokeWidth: vertical ? 1.5 : 1 + (e.weight / maxWeight) * 3 },
+    label: e.label ?? (e.weight > 1 ? String(e.weight) : undefined),
+    markerEnd: { type: MarkerType.ArrowClosed, width: 16, height: 16 },
   }));
   for (const e of overlay?.addedEdges ?? []) {
     edges.push({ id: e.id, source: e.source, target: e.target, className: "flow-edge edge-added", style: { strokeWidth: 2 } });

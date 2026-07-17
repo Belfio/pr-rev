@@ -11,6 +11,10 @@ export const NodeKind = z.enum([
   "datastore",
   "external",
   "cluster",
+  // flow-diagram step kinds
+  "screen",
+  "step",
+  "decision",
 ]);
 
 export const EdgeKind = z.enum(["import", "call", "reads", "writes", "dataflow"]);
@@ -38,6 +42,7 @@ export const TileEdge = z.object({
   target: z.string(),
   kind: EdgeKind,
   weight: z.number().int().positive(),
+  label: z.string().nullable().optional(), // branch/sequence label on flow edges
 });
 
 export const Tile = z.object({

@@ -14,19 +14,36 @@ interface ChatRequest {
   history: { role: "user" | "assistant"; text: string }[];
 }
 
+/** allow only simple identifier-ish path segments from the client (no separators, no dots-only) */
+function assertSafeSegment(value: string, name: string): void {
+  if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(value) || value.includes("..")) {
+    throw new Error(`invalid ${name}`);
+  }
+}
+
 /**
  * Server-side context hydration: the browser sends only references; we load the
  * tile, its explanations, the overlay, and the relevant patches from artifacts.
+ * All client-supplied values are validated before touching the filesystem.
  */
 export async function buildChatContext(
   artifactsDir: string,
   req: ChatRequest,
 ): Promise<{ system: string; prompt: string }> {
-  const aPrefix = path.join(artifactsDir, analysisPrefix(req.owner, req.repo, req.baseSha));
-  const pPrefix = path.join(artifactsDir, prPrefix(req.owner, req.repo, req.prNumber, req.headSha));
+  assertSafeSegment(req.owner, "owner");
+  assertSafeSegment(req.repo, "repo");
+  assertSafeSegment(req.baseSha, "baseSha");
+  assertSafeSegment(req.headSha, "headSha");
+  if (!Number.isInteger(req.prNumber) || req.prNumber <= 0) throw new Error("invalid prNumber");
+  if (!/^[A-Za-z0-9._~/-]+$/.test(req.tileId) || req.tileId.includes("..")) throw new Error("invalid tileId");
+
+  const root = path.resolve(artifactsDir);
+  const aPrefix = path.join(root, analysisPrefix(req.owner, req.repo, req.baseSha));
+  const pPrefix = path.join(root, prPrefix(req.owner, req.repo, req.prNumber, req.headSha));
   const tf = tileFileName(req.tileId);
 
   const read = async (p: string) => {
+    if (!path.resolve(p).startsWith(root + path.sep)) return null; // containment, belt-and-braces
     try {
       return await readFile(p, "utf8");
     } catch {
@@ -52,6 +69,8 @@ export async function buildChatContext(
     const uris = new Set<string>();
     for (const n of nodes as any[]) for (const h of n?.hunkRefs ?? []) uris.add(h.patchUri);
     for (const uri of [...uris].slice(0, 6)) {
+      // patchUri comes from our own artifacts, but validate anyway: must stay under patches/
+      if (typeof uri !== "string" || !uri.startsWith("patches/") || uri.includes("..")) continue;
       const p = await read(path.join(pPrefix, uri));
       if (p) patches += `\n--- ${uri}\n${p.slice(0, 6000)}\n`;
     }

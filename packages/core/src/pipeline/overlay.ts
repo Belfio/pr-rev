@@ -159,12 +159,12 @@ export function buildOverlay(pr: PrInfo, build: TileBuild): OverlayBuild {
       const o = overlay(target);
       o.addedNodes.push(node);
       o.nodes[node.id] = {
-        status: "added",
-        renamedFrom: null,
+        status, // real status — files outside the base code analysis can be modified/removed too
+        renamedFrom: status === "renamed" ? f.previousFilename : null,
         changeSummary: null,
         hunkRefs: hunkRefFor(f),
       };
-      bump(target, "added");
+      bump(target, status);
       // mark ancestor container nodes as modified so highlighting propagates
       const ancestry = tileAncestry(target);
       for (let i = 0; i < ancestry.length - 1; i++) {

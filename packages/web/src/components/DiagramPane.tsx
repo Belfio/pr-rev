@@ -41,7 +41,7 @@ function TileNodeView({ data, selected }: NodeProps<Node<FlowNodeData>>) {
     "tile-node",
     status ? `status-${status}` : "",
     isRemoved ? "status-removed" : "",
-    isNew ? "status-added" : "",
+    isNew && !status ? "status-added" : "",
     tileNode.childTileId ? "drillable" : "",
     selected ? "selected" : "",
   ]
@@ -135,17 +135,22 @@ function DiagramInner({ review }: { review: Review }) {
     [qc, review, navigateTile, setTransitioning, fitView, getNode],
   );
 
+  // selection re-renders replace React Flow's node DOM, which breaks native dblclick
+  // pairing — so detect double-clicks ourselves from click timestamps.
+  const lastClick = useRef<{ id: string; t: number }>({ id: "", t: 0 });
   const onNodeClick = useCallback(
-    (_: unknown, node: Node) => selectNode(node.id === selectedNodeId ? null : node.id),
-    [selectNode, selectedNodeId],
-  );
-
-  const onNodeDoubleClick = useCallback(
     (_: unknown, node: Node) => {
+      const now = Date.now();
       const child = (node.data as FlowNodeData).tileNode.childTileId;
-      if (child) drillInto(node.id, child);
+      if (child && lastClick.current.id === node.id && now - lastClick.current.t < 400) {
+        lastClick.current = { id: "", t: 0 };
+        drillInto(node.id, child);
+        return;
+      }
+      lastClick.current = { id: node.id, t: now };
+      selectNode(node.id === selectedNodeId ? null : node.id);
     },
-    [drillInto],
+    [selectNode, selectedNodeId, drillInto],
   );
 
   const onNodeMouseEnter = useCallback(
@@ -167,8 +172,8 @@ function DiagramInner({ review }: { review: Review }) {
         edges={edges}
         nodeTypes={nodeTypes}
         onNodeClick={onNodeClick}
-        onNodeDoubleClick={onNodeDoubleClick}
         onNodeMouseEnter={onNodeMouseEnter}
+        zoomOnDoubleClick={false}
         onPaneClick={() => selectNode(null)}
         fitView
         fitViewOptions={{ padding: 0.15 }}
@@ -247,11 +252,18 @@ function toFlow(
   if (overlay && overlay.addedNodes.length > 0) {
     const maxY = Math.max(0, ...tile.nodes.map((n) => n.pos.y + n.pos.h));
     overlay.addedNodes.forEach((n, i) => {
+      const status = overlay.nodes[n.id]?.status ?? "added";
       nodes.push({
         id: n.id,
         type: "tile",
         position: { x: 20 + (i % 4) * 200, y: maxY + 80 + Math.floor(i / 4) * 90 },
-        data: { tileNode: { ...n, pos: { ...n.pos, w: 180, h: 64 } }, status: "added", changeCount: 0, isRemoved: false, isNew: true },
+        data: {
+          tileNode: { ...n, pos: { ...n.pos, w: 180, h: 64 } },
+          status,
+          changeCount: 0,
+          isRemoved: status === "removed",
+          isNew: true,
+        },
       });
     });
   }

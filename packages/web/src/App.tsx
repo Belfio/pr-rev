@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, keys, queryDefaults, type Review } from "./lib/api";
 import { useUi, syncUrl, readUrl } from "./state/store";
@@ -9,10 +9,14 @@ export function App() {
   const { review, setReview, tileId, selectedNodeId, navigateTile, selectNode } = useUi();
   const reviewsQ = useQuery({ queryKey: keys.reviews(), queryFn: api.reviews, ...queryDefaults, staleTime: 30_000 });
 
-  // deep-link restore
+  // capture the deep link synchronously on first render, before any syncUrl effect can clear it
+  const initialUrl = useRef(readUrl());
+  const restorePending = useRef(initialUrl.current.repo != null);
+
   useEffect(() => {
-    if (!reviewsQ.data || review) return;
-    const url = readUrl();
+    if (!reviewsQ.data || review || !restorePending.current) return;
+    restorePending.current = false;
+    const url = initialUrl.current;
     if (url.repo && url.pr) {
       const found = reviewsQ.data.find((r) => `${r.owner}/${r.repo}` === url.repo && r.prNumber === url.pr);
       if (found) {
@@ -24,6 +28,7 @@ export function App() {
   }, [reviewsQ.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
+    if (restorePending.current) return; // don't clobber the deep link before restore runs
     syncUrl(review, tileId, selectedNodeId);
   }, [review, tileId, selectedNodeId]);
 

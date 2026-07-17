@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { streamSSE } from "hono/streaming";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createLlmClient } from "@pr-rev/core";
 import { buildChatContext } from "./chat-context.js";
@@ -22,11 +22,17 @@ app.get("/api/reviews", async (c) => {
   }
 });
 
-// serve any artifact file; path is validated to stay inside ARTIFACTS
+// serve any artifact file; path is validated (incl. symlink resolution) to stay inside ARTIFACTS
 app.get("/api/artifacts/*", async (c) => {
   const rel = decodeURIComponent(c.req.path.replace(/^\/api\/artifacts\//, ""));
-  const abs = path.resolve(ARTIFACTS, rel);
-  if (!abs.startsWith(path.resolve(ARTIFACTS) + path.sep)) return c.text("forbidden", 403);
+  if (rel.includes("\0") || rel.split("/").some((s) => s === "..")) return c.text("forbidden", 403);
+  const root = await realpath(path.resolve(ARTIFACTS)).catch(() => null);
+  if (!root) return c.text("not found", 404);
+  const lexical = path.resolve(root, rel);
+  if (!lexical.startsWith(root + path.sep)) return c.text("forbidden", 403);
+  const abs = await realpath(lexical).catch(() => null); // follows symlinks
+  if (!abs) return c.text("not found", 404); // file doesn't exist
+  if (!abs.startsWith(root + path.sep)) return c.text("forbidden", 403); // symlink escape
   try {
     const data = await readFile(abs);
     const type = abs.endsWith(".json")
@@ -35,7 +41,12 @@ app.get("/api/artifacts/*", async (c) => {
         ? "text/markdown; charset=utf-8"
         : "text/plain; charset=utf-8";
     c.header("Content-Type", type);
-    c.header("Cache-Control", "public, max-age=31536000, immutable"); // SHA-keyed => immutable
+    // SHA-keyed artifacts are immutable in principle, but local dev regenerates them
+    // in place — only send immutable headers when explicitly enabled (deployed mode).
+    c.header(
+      "Cache-Control",
+      process.env.IMMUTABLE_ARTIFACTS ? "public, max-age=31536000, immutable" : "no-cache",
+    );
     return c.body(data);
   } catch {
     return c.text("not found", 404);

@@ -6,3 +6,5 @@ artifacts/
 *.log
 .DS_Store
 work/
+.playwright-mcp/
+*.png

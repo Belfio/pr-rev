@@ -56,24 +56,26 @@ and [`docs/superpowers/specs/2026-07-17-triptych-contract.md`](docs/superpowers/
 ## Quick start
 
 ```sh
-pnpm install
-
-# 1. analyze a PR — writes ./artifacts/ (uses gh for GitHub, an LLM backend for explanations)
-pnpm analyze owner/repo 123
-
-# 2. run the app (API on :3001, web on :5173)
-pnpm dev
-
-# 3. open http://localhost:5173
+pnpm install && pnpm dev   # API on :3001, web on :5173
 ```
 
-To try the pipeline without any LLM (fast, free, structure-only):
+Open http://localhost:5173, type a repo (`owner/repo`) into the picker and hit **Load**: the
+home page lists that repo's open pull requests live from GitHub. Click **Analyze** on any PR to
+run the pipeline right there — no terminal needed. Progress streams inline on the row; when it
+finishes the button flips to **Open review →**. The last-used repo is remembered and reloaded on
+your next visit. (Analyses run one at a time; queue as many as you like.)
+
+The CLI path still works and is the way to go for CI or scripting:
 
 ```sh
+# analyze a PR — writes ./artifacts/ (uses gh for GitHub, an LLM backend for explanations)
+pnpm analyze owner/repo 123
+
+# without any LLM (fast, free, structure-only)
 pnpm analyze owner/repo 123 --skip-llm
 ```
 
-Analyze more PRs at any time; each appears in the app's review list. Re-run `pnpm dev` is not
+Analyze more PRs at any time; each appears in the app's review list. Restarting `pnpm dev` is not
 needed between analyses — the API serves whatever is in `./artifacts/`.
 
 ## How it works

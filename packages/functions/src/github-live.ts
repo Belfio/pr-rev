@@ -33,11 +33,42 @@ export interface PrMeta {
   comments: PrComment[];
 }
 
-export function assertSafeRepoRef(owner: string, repo: string, num: number): void {
+export function assertSafeRepo(owner: string, repo: string): void {
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(owner) || !/^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(repo)) {
     throw new Error("invalid repo ref");
   }
+}
+
+export function assertSafeRepoRef(owner: string, repo: string, num: number): void {
+  assertSafeRepo(owner, repo);
   if (!Number.isInteger(num) || num <= 0) throw new Error("invalid PR number");
+}
+
+export interface PrListItem {
+  number: number;
+  title: string;
+  author: string;
+  draft: boolean;
+  createdAt: string;
+  headSha: string;
+  url: string;
+}
+
+export async function listOpenPrs(owner: string, repo: string): Promise<PrListItem[]> {
+  assertSafeRepo(owner, repo);
+  const raw = await gh(["api", `repos/${owner}/${repo}/pulls?state=open&per_page=50`]);
+  const prs = JSON.parse(raw) as any[];
+  return prs.map(
+    (p): PrListItem => ({
+      number: p.number,
+      title: p.title,
+      author: p.user?.login ?? "unknown",
+      draft: Boolean(p.draft),
+      createdAt: p.created_at,
+      headSha: p.head?.sha ?? "",
+      url: p.html_url,
+    }),
+  );
 }
 
 export async function getPrMeta(owner: string, repo: string, num: number): Promise<PrMeta> {

@@ -140,7 +140,143 @@ body {
   display: flex;
   flex-direction: column;
   gap: 10px;
-  margin-top: 28px;
+  margin-top: 16px;
+}
+
+/* ---------- home: repo picker + open PRs ---------- */
+.repo-picker {
+  display: flex;
+  gap: 8px;
+  margin-top: 24px;
+}
+
+.repo-input {
+  flex: 1;
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 9px 12px;
+  font: inherit;
+  font-family: var(--mono);
+  font-size: 14px;
+}
+
+.repo-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+
+.repo-load {
+  background: var(--accent);
+  color: #000;
+  border: none;
+  border-radius: 8px;
+  padding: 0 18px;
+  font-weight: 600;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.repo-load:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.home-section-head {
+  margin-top: 32px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 6px;
+}
+
+.pr-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  background: var(--bg-raised);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+
+.pr-row-main {
+  flex: 1;
+  min-width: 0;
+}
+
+.pr-row-actions {
+  flex: 0 0 auto;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.pr-draft-chip {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+  background: rgba(139, 148, 158, 0.2);
+  border-radius: 8px;
+  padding: 1px 7px;
+  margin-left: 4px;
+}
+
+.pr-action {
+  background: none;
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 8px;
+  padding: 7px 14px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: border-color 0.15s;
+}
+
+.pr-action:hover {
+  border-color: var(--accent);
+}
+
+.pr-action-open {
+  background: var(--accent);
+  color: #000;
+  border-color: var(--accent);
+}
+
+.pr-progress {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 6px;
+  font-size: 12px;
+  color: var(--text-dim);
+  font-family: var(--mono);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.spinner {
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+  border: 2px solid var(--border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
 }
 
 .review-card {

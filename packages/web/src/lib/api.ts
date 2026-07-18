@@ -12,6 +12,28 @@ export interface Review {
   generatedAt: string;
 }
 
+export interface PrListItem {
+  number: number;
+  title: string;
+  author: string;
+  draft: boolean;
+  createdAt: string;
+  headSha: string;
+  url: string;
+}
+
+export type JobState = "queued" | "running" | "done" | "error";
+
+export interface AnalyzeJob {
+  owner: string;
+  repo: string;
+  prNumber: number;
+  state: JobState;
+  startedAt: string;
+  log: string[];
+  error?: string;
+}
+
 export interface TileNode {
   id: string;
   kind: string;
@@ -177,6 +199,9 @@ const tf = (tileId: string) => tileId.replaceAll("/", "__");
 
 export const keys = {
   reviews: () => ["reviews"] as const,
+  openPrs: (owner: string, repo: string) => ["openPrs", owner, repo] as const,
+  analyzeJob: (owner: string, repo: string, prNumber: number) =>
+    ["analyzeJob", owner, repo, prNumber] as const,
   manifest: (r: Review) => ["manifest", r.owner, r.repo, r.baseSha] as const,
   tile: (r: Review, tileId: string) => ["tile", r.owner, r.repo, r.baseSha, tileId] as const,
   tileMd: (r: Review, tileId: string) => ["tileMd", r.owner, r.repo, r.baseSha, tileId] as const,
@@ -221,6 +246,22 @@ async function fetchJsonOrNull<T>(url: string): Promise<T | null> {
 
 export const api = {
   reviews: () => fetchJson<Review[]>("/api/reviews"),
+  openPrs: async (owner: string, repo: string): Promise<PrListItem[]> => {
+    const res = await fetch(`/api/prs/${owner}/${repo}`);
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `failed (${res.status})`);
+    return res.json();
+  },
+  startAnalysis: async (owner: string, repo: string, prNumber: number): Promise<{ state: JobState }> => {
+    const res = await fetch("/api/analyze", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ owner, repo, prNumber }),
+    });
+    if (!res.ok) throw new Error((await res.json().catch(() => null))?.error ?? `failed (${res.status})`);
+    return res.json();
+  },
+  analyzeJob: (owner: string, repo: string, prNumber: number) =>
+    fetchJsonOrNull<AnalyzeJob>(`/api/analyze/${owner}/${repo}/${prNumber}`),
   manifest: (r: Review) => fetchJson<AnalysisManifest>(`/api/artifacts/${aPrefix(r)}/manifest.json`),
   tile: (r: Review, tileId: string) =>
     fetchJson<Tile>(`/api/artifacts/${aPrefix(r)}/tiles/${tf(tileId)}.json`),

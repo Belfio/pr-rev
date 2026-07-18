@@ -5,13 +5,16 @@ import { readFile, realpath } from "node:fs/promises";
 import path from "node:path";
 import { createLlmClient } from "@pr-rev/core";
 import { buildChatContext } from "./chat-context.js";
-import { getPrMeta, postPrComment } from "./github-live.js";
+import { getPrMeta, postPrComment, listOpenPrs } from "./github-live.js";
+import { AnalysisRunner } from "./jobs.js";
 
 const ROOT = path.resolve(import.meta.dirname, "../../..");
 const ARTIFACTS = process.env.ARTIFACTS_DIR ?? path.join(ROOT, "artifacts");
+const WORK = path.join(ROOT, "work");
 
 const app = new Hono();
 const llm = createLlmClient();
+const runner = new AnalysisRunner(ARTIFACTS, WORK);
 
 app.get("/api/health", (c) => c.json({ ok: true }));
 
@@ -21,6 +24,40 @@ app.get("/api/reviews", async (c) => {
   } catch {
     return c.json([]);
   }
+});
+
+// live list of a repo's open PRs — proxied from GitHub, never cached
+app.get("/api/prs/:owner/:repo", async (c) => {
+  try {
+    const prs = await listOpenPrs(c.req.param("owner"), c.req.param("repo"));
+    c.header("Cache-Control", "no-store");
+    return c.json(prs);
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 400);
+  }
+});
+
+// kick off (or re-run) an analysis in-process; the runner serializes concurrent requests
+app.post("/api/analyze", async (c) => {
+  try {
+    const { owner, repo, prNumber } = (await c.req.json()) as {
+      owner: string;
+      repo: string;
+      prNumber: number;
+    };
+    const rec = runner.enqueue(owner, repo, Number(prNumber));
+    return c.json({ state: rec.state }, 202);
+  } catch (e) {
+    return c.json({ error: (e as Error).message }, 400);
+  }
+});
+
+// poll a job's state + rolling log
+app.get("/api/analyze/:owner/:repo/:number", (c) => {
+  const rec = runner.get(c.req.param("owner"), c.req.param("repo"), Number(c.req.param("number")));
+  c.header("Cache-Control", "no-store");
+  if (!rec) return c.json({ error: "unknown job" }, 404);
+  return c.json(rec);
 });
 
 // serve any artifact file; path is validated (incl. symlink resolution) to stay inside ARTIFACTS

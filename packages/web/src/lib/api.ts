@@ -96,8 +96,75 @@ export interface PrMeta {
 export interface AnalysisManifest {
   rootTileId: string;
   tileIds: string[];
-  flows: { tileId: string; title: string }[];
+  // direct/shared are PR-relative flow classification added by the pipeline; tolerate
+  // their absence on older manifests (treat as neither direct nor shared).
+  flows: { tileId: string; title: string; direct?: boolean; shared?: boolean }[];
   coverage: { analyzedFiles: number; eligibleFiles: number; unresolvedImports: number };
+}
+
+// ---------- Data (triptych "Data" tab) ----------
+
+export interface DataField {
+  name: string;
+  type: string;
+  optional: boolean;
+}
+
+export interface DataEntity {
+  id: string;
+  name: string;
+  kind: "object" | "enum";
+  provenance: "generated-db" | "app-type" | "migration";
+  definedIn: string;
+  fields: DataField[];
+  values?: string[]; // kind === "enum" only
+  pos: { x: number; y: number; w: number; h: number };
+}
+
+export interface DataEdge {
+  source: string;
+  target: string;
+  label: string;
+}
+
+/** analysis/{owner}/{repo}/{baseSha}/data.json — base entities, PR-independent */
+export interface DataArtifact {
+  schemaVersion: number;
+  status: "ok" | "unsupported";
+  sources: string[];
+  entities: DataEntity[];
+  edges: DataEdge[];
+  consumers: Record<string, string[]>; // definedIn file -> files importing it
+}
+
+// Field-level statuses come from the pipeline as "changed" (not "modified" — that's
+// the ENTITY-level status); see packages/core/src/schemas.ts DataOverlayField.
+export interface FieldOverlay {
+  status: "added" | "removed" | "changed";
+  type: string | null;
+  prevType?: string | null;
+}
+
+export interface EntityOverlay {
+  status: "added" | "removed" | "modified";
+  fields?: Record<string, FieldOverlay>;
+  valuesAdded?: string[];
+  valuesRemoved?: string[];
+}
+
+export interface MigrationOp {
+  file: string;
+  op: string;
+  table?: string;
+  analyzed?: boolean; // absent === analyzed; false === surfaced as "not analyzed"
+}
+
+/** pr/{owner}/{repo}/{n}/{headSha}/data-overlay.json */
+export interface DataOverlay {
+  status: "ok" | "none" | "unsupported";
+  entities: Record<string, EntityOverlay>;
+  addedEntities: DataEntity[];
+  migrationOps?: MigrationOp[];
 }
 
 export interface OverlayManifest {
@@ -119,6 +186,8 @@ export const keys = {
   prSummary: (r: Review) => ["prsum", r.owner, r.repo, r.prNumber, r.headSha] as const,
   patch: (r: Review, uri: string) => ["patch", r.owner, r.repo, r.prNumber, r.headSha, uri] as const,
   prMeta: (r: Review) => ["prMeta", r.owner, r.repo, r.prNumber] as const,
+  data: (r: Review) => ["data", r.owner, r.repo, r.baseSha] as const,
+  dataOverlay: (r: Review) => ["dataOv", r.owner, r.repo, r.prNumber, r.headSha] as const,
 };
 
 const aPrefix = (r: Review) => `analysis/${r.owner}/${r.repo}/${r.baseSha}`;
@@ -168,6 +237,8 @@ export const api = {
   patch: (r: Review, patchUri: string) =>
     fetchText(`/api/artifacts/${pPrefix(r)}/${patchUri}`),
   prMeta: (r: Review) => fetchJson<PrMeta>(`/api/pr/${r.owner}/${r.repo}/${r.prNumber}`),
+  data: (r: Review) => fetchJsonOrNull<DataArtifact>(`/api/artifacts/${aPrefix(r)}/data.json`),
+  dataOverlay: (r: Review) => fetchJsonOrNull<DataOverlay>(`/api/artifacts/${pPrefix(r)}/data-overlay.json`),
   postComment: async (r: Review, body: string): Promise<PrComment> => {
     const res = await fetch(`/api/pr/${r.owner}/${r.repo}/${r.prNumber}/comments`, {
       method: "POST",
@@ -190,4 +261,10 @@ export function prefetchTile(qc: QueryClient, r: Review, tileId: string): void {
   qc.prefetchQuery({ queryKey: keys.tileMd(r, tileId), queryFn: () => api.tileMd(r, tileId), ...queryDefaults });
   qc.prefetchQuery({ queryKey: keys.overlay(r, tileId), queryFn: () => api.overlay(r, tileId), ...queryDefaults });
   qc.prefetchQuery({ queryKey: keys.overlayMd(r, tileId), queryFn: () => api.overlayMd(r, tileId), ...queryDefaults });
+}
+
+/** prefetch the base data artifact + PR data overlay when entering the Data tab */
+export function prefetchData(qc: QueryClient, r: Review): void {
+  qc.prefetchQuery({ queryKey: keys.data(r), queryFn: () => api.data(r), ...queryDefaults });
+  qc.prefetchQuery({ queryKey: keys.dataOverlay(r), queryFn: () => api.dataOverlay(r), ...queryDefaults });
 }

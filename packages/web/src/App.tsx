@@ -2,11 +2,12 @@ import { useEffect, useRef } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api, keys, queryDefaults, type Review } from "./lib/api";
 import { useUi, syncUrl, readUrl } from "./state/store";
-import { DiagramPane } from "./components/DiagramPane";
+import { LeftPane } from "./components/LeftPane";
 import { TextPane } from "./components/TextPane";
 
 export function App() {
-  const { review, setReview, tileId, selectedNodeId, navigateTile, selectNode } = useUi();
+  const { review, setReview, view, tileId, selectedNodeId, selectedEntityId, setView, navigateTile, selectNode, selectEntity } =
+    useUi();
   const reviewsQ = useQuery({ queryKey: keys.reviews(), queryFn: api.reviews, ...queryDefaults, staleTime: 30_000 });
 
   // capture the deep link synchronously on first render, before any syncUrl effect can clear it
@@ -21,16 +22,18 @@ export function App() {
       const found = reviewsQ.data.find((r) => `${r.owner}/${r.repo}` === url.repo && r.prNumber === url.pr);
       if (found) {
         setReview(found);
+        if (url.view !== "folders") setView(url.view);
         if (url.tile !== "root") navigateTile(url.tile);
         if (url.node) selectNode(url.node);
+        if (url.entity) selectEntity(url.entity);
       }
     }
   }, [reviewsQ.data]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if (restorePending.current) return; // don't clobber the deep link before restore runs
-    syncUrl(review, tileId, selectedNodeId);
-  }, [review, tileId, selectedNodeId]);
+    syncUrl(review, view, tileId, selectedNodeId, selectedEntityId);
+  }, [review, view, tileId, selectedNodeId, selectedEntityId]);
 
   if (!review) return <Home reviews={reviewsQ.data ?? []} loading={reviewsQ.isLoading} onOpen={setReview} />;
 
@@ -52,7 +55,7 @@ export function App() {
       </header>
       <main className="split">
         <div className="left">
-          <DiagramPane review={review} />
+          <LeftPane review={review} />
         </div>
         <div className="right">
           <TextPane review={review} />

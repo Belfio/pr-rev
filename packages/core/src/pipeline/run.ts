@@ -7,10 +7,13 @@ import { buildFlowSpecs, assembleExtractedFlow, assembleFallbackFlow } from "./f
 import { extractFlow } from "../llm/flow-extract.js";
 import { layoutTile } from "./layout.js";
 import { buildOverlay } from "./overlay.js";
+import { buildData } from "./data.js";
 import { createLlmClient, pMap } from "../llm/client.js";
 import { decorateTile, explainOverlay, summarizePr } from "../llm/decorate.js";
 import {
   Tile as TileSchema,
+  DataArtifact as DataArtifactSchema,
+  DataOverlay as DataOverlaySchema,
   analysisPrefix,
   prPrefix,
   tileFileName,
@@ -84,7 +87,20 @@ export async function analyze(opts: AnalyzeOptions): Promise<void> {
       flowMembership.get(m.file)!.push({ tileId: m.tileId, nodeId: m.nodeId });
     }
   }
-  const flowList = specs.map((s) => ({ tileId: s.tileId, title: s.title }));
+  // Per-flow PR classification: DIRECT = a changed file is cited by a step of the flow;
+  // SHARED = a changed file is in the flow's reachable set but cited by no step.
+  const citedByTile = new Map<string, Set<string>>();
+  for (const a of assembled) {
+    const set = citedByTile.get(a.tile.tileId) ?? new Set<string>();
+    for (const m of a.membership) set.add(m.file);
+    citedByTile.set(a.tile.tileId, set);
+  }
+  const flowList = specs.map((s) => {
+    const cited = citedByTile.get(s.tileId) ?? new Set<string>();
+    const direct = s.reachable.some((f) => changedFiles.has(f) && cited.has(f));
+    const shared = s.reachable.some((f) => changedFiles.has(f) && !cited.has(f));
+    return { tileId: s.tileId, title: s.title, direct, shared };
+  });
   const flowExplanations = new Map(
     assembled.filter((a) => a.explanation).map((a) => [a.tile.tileId, a.explanation!]),
   );
@@ -96,6 +112,17 @@ export async function analyze(opts: AnalyzeOptions): Promise<void> {
   log("Building PR overlay...");
   const overlayBuild = buildOverlay(pr, build, flowMembership);
   log(`  ${overlayBuild.overlays.size} touched tiles`);
+
+  log("Building Data artifact (schema entities + PR overlay)...");
+  const data = await buildData({
+    owner: opts.owner,
+    repo: opts.repo,
+    pr,
+    baseDir: repoDir,
+    workDir: opts.workDir,
+    graph,
+    log,
+  });
 
   // --- LLM passes (concurrent per tile) ---
   const explanations = new Map<string, string>(); // tileId -> md
@@ -189,6 +216,12 @@ export async function analyze(opts: AnalyzeOptions): Promise<void> {
   }
   await writeFile(path.join(pPrefix, "overlays", "pr-summary.md"), prSummary);
   await writeFile(path.join(pPrefix, "overlay-manifest.json"), JSON.stringify(overlayBuild.manifest, null, 2));
+
+  // Data artifacts (validate against the contract schemas before publishing)
+  DataArtifactSchema.parse(data.artifact);
+  DataOverlaySchema.parse(data.overlay);
+  await writeFile(path.join(aPrefix, "data.json"), JSON.stringify(data.artifact));
+  await writeFile(path.join(pPrefix, "data-overlay.json"), JSON.stringify(data.overlay));
 
   const manifest: AnalysisManifest = {
     schemaVersion: 1,

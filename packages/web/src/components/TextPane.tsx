@@ -2,15 +2,16 @@ import { useState } from "react";
 import Markdown from "react-markdown";
 import { useQuery } from "@tanstack/react-query";
 import { api, keys, queryDefaults } from "../lib/api";
-import type { Review } from "../lib/api";
+import type { Review, DataArtifact, DataEntity, DataOverlay } from "../lib/api";
 import { useUi } from "../state/store";
 import { DiffView } from "./DiffView";
 import { Chat } from "./Chat";
 import { Conversation } from "./Conversation";
+import { useDataArtifacts, entityOverlayFor, mergeFields } from "./DataPane";
 
 export function TextPane({ review }: { review: Review }) {
   const [tab, setTab] = useState<"review" | "conversation">("review");
-  const { tileId, selectedNodeId } = useUi();
+  const { view, tileId, selectedNodeId } = useUi();
   const metaQ = useQuery({
     queryKey: keys.prMeta(review),
     queryFn: () => api.prMeta(review),
@@ -50,6 +51,13 @@ export function TextPane({ review }: { review: Review }) {
       </div>
       {tab === "conversation" ? (
         <Conversation review={review} />
+      ) : view === "data" ? (
+        <>
+          <div className="text-scroll">
+            <DataReview review={review} />
+          </div>
+          <Chat review={review} />
+        </>
       ) : (
         <>
       <div className="text-scroll">
@@ -107,5 +115,157 @@ export function TextPane({ review }: { review: Review }) {
         </>
       )}
     </div>
+  );
+}
+
+function findEntity(data: DataArtifact | null, overlay: DataOverlay | null, id: string | null): DataEntity | null {
+  if (!id) return null;
+  return (
+    data?.entities.find((e) => e.id === id) ??
+    overlay?.addedEntities.find((e) => e.id === id) ??
+    null
+  );
+}
+
+// DB tables are snake_case + plural ("families"); entities are PascalCase + singular
+// ("Family"). Compare on a normalized singular snake_case stem so the two line up.
+function toSnake(s: string): string {
+  return s.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
+}
+function singular(s: string): string {
+  if (s.endsWith("ies")) return s.slice(0, -3) + "y";
+  if (s.endsWith("es")) return s.slice(0, -2);
+  if (s.endsWith("s")) return s.slice(0, -1);
+  return s;
+}
+function migrationOpsForEntity(overlay: DataOverlay | null, entity: DataEntity) {
+  const target = toSnake(entity.name);
+  return (overlay?.migrationOps ?? []).filter((op) => {
+    if (!op.table) return false;
+    const t = op.table.toLowerCase();
+    return t === target || singular(t) === target || singular(t) === singular(target);
+  });
+}
+
+function DataReview({ review }: { review: Review }) {
+  const { data, overlay } = useDataArtifacts(review);
+  const { selectedEntityId } = useUi();
+  const entity = findEntity(data, overlay, selectedEntityId);
+
+  if (!entity) {
+    return (
+      <section className="text-section">
+        <h2 className="section-title">Data model</h2>
+        <p className="muted">Select an entity to see its provenance, field-level diff, and possible consumers.</p>
+        {data && data.sources.length > 0 && (
+          <p className="anchors">
+            {data.sources.map((s) => (
+              <code key={s}>{s}</code>
+            ))}
+          </p>
+        )}
+      </section>
+    );
+  }
+
+  const ov = entityOverlayFor(overlay, entity);
+  const rows = entity.kind === "object" ? mergeFields(entity, ov) : [];
+  const ops = migrationOpsForEntity(overlay, entity);
+  const consumers = data?.consumers[entity.definedIn] ?? [];
+
+  return (
+    <>
+      <section className="text-section">
+        <h2 className="section-title">
+          {entity.name}
+          {ov && <span className={`badge badge-${ov.status}`}>{ov.status}</span>}
+        </h2>
+        <p className="entity-meta">
+          <span className="entity-prov">{entity.provenance}</span>
+          <span className="muted">defined in</span>
+          <code>{entity.definedIn}</code>
+        </p>
+      </section>
+
+      {entity.kind === "enum" ? (
+        <section className="text-section">
+          <h2 className="section-title">Values</h2>
+          <div className="enum-values">
+            {(entity.values ?? []).map((v) => (
+              <span key={v} className={`enum-chip ${ov?.valuesRemoved?.includes(v) ? "val-removed" : ""}`}>
+                {v}
+              </span>
+            ))}
+            {(ov?.valuesAdded ?? [])
+              .filter((v) => !(entity.values ?? []).includes(v))
+              .map((v) => (
+                <span key={v} className="enum-chip val-added">
+                  {v}
+                </span>
+              ))}
+          </div>
+        </section>
+      ) : (
+        <section className="text-section">
+          <h2 className="section-title">Fields</h2>
+          <table className="diff-table">
+            <thead>
+              <tr>
+                <th>field</th>
+                <th>before</th>
+                <th>after</th>
+                <th>status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((f) => {
+                const st = f.overlay?.status;
+                const before =
+                  st === "added" ? "—" : st === "changed" ? (f.overlay?.prevType ?? "—") : st === "removed" ? (f.overlay?.prevType ?? f.type) : f.type;
+                const after = st === "removed" ? "—" : st === "changed" || st === "added" ? f.overlay!.type : f.type;
+                return (
+                  <tr key={f.name} className={st ? `fld-${st}` : ""}>
+                    <td className="dt-name">
+                      {f.name}
+                      {f.optional && <span className="fld-opt">?</span>}
+                    </td>
+                    <td className="dt-type">{before}</td>
+                    <td className="dt-type">{after}</td>
+                    <td>{st ? <span className={`badge badge-${st}`}>{st}</span> : <span className="muted">—</span>}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </section>
+      )}
+
+      {ops.length > 0 && (
+        <section className="text-section">
+          <h2 className="section-title">Migration ops</h2>
+          {ops.map((op, i) => (
+            <div key={i} className="migration-op">
+              <code className="migration-file">{op.file}</code>
+              <span className="migration-sql">{op.op}</span>
+              {op.analyzed === false && <span className="migration-warn">⚠ not analyzed</span>}
+            </div>
+          ))}
+        </section>
+      )}
+
+      <section className="text-section">
+        <h2 className="section-title">Possible consumers</h2>
+        <p className="muted">Files importing the schema module.</p>
+        {consumers.length > 0 ? (
+          <p className="anchors">
+            {consumers.map((c) => (
+              <code key={c}>{c}</code>
+            ))}
+          </p>
+        ) : (
+          <p className="muted">None found.</p>
+        )}
+      </section>
+    </>
   );
 }

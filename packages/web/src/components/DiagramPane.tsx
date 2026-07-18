@@ -15,7 +15,7 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api, keys, prefetchTile, queryDefaults } from "../lib/api";
-import type { Review, Tile, TileOverlay, TileNode, OverlayManifest, AnalysisManifest } from "../lib/api";
+import type { Review, Tile, TileOverlay, TileNode, OverlayManifest } from "../lib/api";
 import { useUi } from "../state/store";
 
 const KIND_ICON: Record<string, string> = {
@@ -92,11 +92,6 @@ function DiagramInner({ review }: { review: Review }) {
   const manifestQ = useQuery({
     queryKey: keys.overlayManifest(review),
     queryFn: () => api.overlayManifest(review),
-    ...queryDefaults,
-  });
-  const analysisQ = useQuery({
-    queryKey: keys.manifest(review),
-    queryFn: () => api.manifest(review),
     ...queryDefaults,
   });
 
@@ -190,12 +185,6 @@ function DiagramInner({ review }: { review: Review }) {
 
   return (
     <div className={`diagram-wrap ${transitioning === "out" ? "fade-out" : transitioning === "in" ? "fade-in" : ""}`}>
-      <ViewSwitcher
-        current={tileId}
-        analysis={analysisQ.data ?? null}
-        overlayManifest={manifest}
-        onNavigate={softNavigate}
-      />
       <Breadcrumbs tile={tile} manifest={manifest} onNavigate={softNavigate} />
       <ReactFlow
         nodes={nodes.map((n) => ({ ...n, selected: n.id === selectedNodeId }))}
@@ -222,46 +211,6 @@ function DiagramInner({ review }: { review: Review }) {
           ⚠ {tile.coverage.unresolvedImports} unresolved imports — some edges may be missing
         </div>
       )}
-    </div>
-  );
-}
-
-function ViewSwitcher({
-  current,
-  analysis,
-  overlayManifest,
-  onNavigate,
-}: {
-  current: string;
-  analysis: AnalysisManifest | null;
-  overlayManifest: OverlayManifest | null;
-  onNavigate: (tileId: string) => void;
-}) {
-  if (!analysis || analysis.flows.length === 0) return null;
-  const inFlow = current.startsWith("flow:");
-  return (
-    <div className="view-switcher">
-      <button className={`view-tab ${!inFlow ? "view-tab-active" : ""}`} onClick={() => !inFlow || onNavigate("root")}>
-        Structure
-      </button>
-      {analysis.flows.map((f) => {
-        const touched = overlayManifest?.touchedTiles[f.tileId];
-        return (
-          <button
-            key={f.tileId}
-            className={`view-tab ${current === f.tileId ? "view-tab-active" : ""}`}
-            onClick={() => current === f.tileId || onNavigate(f.tileId)}
-            title={f.title}
-          >
-            {f.title.replace(/^Flow: /, "⇢ ")}
-            {touched && (
-              <span className="crumb-badge">
-                {touched.counts.added + touched.counts.modified + touched.counts.removed}
-              </span>
-            )}
-          </button>
-        );
-      })}
     </div>
   );
 }

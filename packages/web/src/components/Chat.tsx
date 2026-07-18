@@ -4,7 +4,7 @@ import type { Review } from "../lib/api";
 import { useUi } from "../state/store";
 
 export function Chat({ review }: { review: Review }) {
-  const { tileId, selectedNodeId, chat, chatBusy, pushChat, appendToLastChat, setChatBusy } = useUi();
+  const { view, tileId, selectedNodeId, selectedEntityId, chat, chatBusy, pushChat, appendToLastChat, setChatBusy } = useUi();
   const [input, setInput] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
 
@@ -32,6 +32,8 @@ export function Chat({ review }: { review: Review }) {
           headSha: review.headSha,
           tileId,
           selectedNodeId,
+          view,
+          selectedEntityId,
           message,
           history,
         }),

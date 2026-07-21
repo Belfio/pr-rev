@@ -1,8 +1,9 @@
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { api, keys, queryDefaults, prefetchData, prefetchTile } from "../lib/api";
-import type { Review, AnalysisManifest, OverlayManifest, DataOverlay } from "../lib/api";
-import { useUi, type PrimaryView } from "../state/store";
+import { useQuery, useQueries, useQueryClient } from "@tanstack/react-query";
+import { api, keys, queryDefaults, prefetchData, prefetchFeatureDoc, isFeatureId } from "../lib/api";
+import type { Review, OverlayManifest, DataOverlay, FeatureListItem, FeatureDocOverlay } from "../lib/api";
+import { useUi } from "../state/store";
 import { DiagramPane } from "./DiagramPane";
+import { FeatureDocPane } from "./FeatureDocPane";
 import { DataPane, useDataArtifacts } from "./DataPane";
 
 function touchedTotal(m: OverlayManifest | null, tileId: string): number | null {
@@ -31,25 +32,26 @@ export function LeftPane({ review }: { review: Review }) {
 
   const manifest = manifestQ.data ?? null;
   const overlayManifest = overlayManifestQ.data ?? null;
-  const flows = manifest?.flows ?? [];
-  const directFlows = flows.filter((f) => f.direct);
+  const features = overlayManifest?.features ?? [];
+  const directFeatures = features.filter((f) => f.direct);
 
   const rootTileId = manifest?.rootTileId ?? "root";
   const foldersCount = touchedTotal(overlayManifest, rootTileId);
-  const flowsCount = manifest ? directFlows.length : null;
+  const flowsCount = overlayManifest ? directFeatures.length : null;
   const dataCount = changedEntityCount(dataOverlay);
 
   const enterFolders = () => {
     setView("folders");
-    if (tileId.startsWith("flow:")) navigateTile(rootTileId);
+    if (isFeatureId(tileId)) navigateTile(rootTileId);
   };
   const enterFlows = () => {
     const entering = view !== "flows";
     setView("flows");
-    // auto-open the single direct flow; otherwise fall to the overview list
-    if (entering) {
-      if (directFlows.length === 1) navigateTile(directFlows[0]!.tileId);
-      else if (tileId.startsWith("flow:")) navigateTile(rootTileId);
+    // auto-open the single direct feature; otherwise fall to the overview list
+    if (entering && directFeatures.length === 1) {
+      const slug = directFeatures[0]!.slug;
+      prefetchFeatureDoc(qc, review, slug);
+      navigateTile(`feature:${slug}`);
     }
   };
   const enterData = () => {
@@ -66,9 +68,7 @@ export function LeftPane({ review }: { review: Review }) {
       </div>
       <div className="primary-content">
         {view === "folders" && <DiagramPane review={review} />}
-        {view === "flows" && (
-          <FlowsView review={review} manifest={manifest} overlayManifest={overlayManifest} />
-        )}
+        {view === "flows" && <FlowsView review={review} features={features} />}
         {view === "data" && <DataPane review={review} />}
       </div>
     </div>
@@ -94,50 +94,53 @@ function PrimaryTab({
   );
 }
 
-function FlowsView({
-  review,
-  manifest,
-  overlayManifest,
-}: {
-  review: Review;
-  manifest: AnalysisManifest | null;
-  overlayManifest: OverlayManifest | null;
-}) {
+function FlowsView({ review, features }: { review: Review; features: FeatureListItem[] }) {
   const qc = useQueryClient();
   const { tileId, navigateTile } = useUi();
-  const flows = manifest?.flows ?? [];
 
-  if (flows.length === 0) {
-    return <div className="data-empty">No user flows were extracted for this repository</div>;
+  // Per-feature change badge = number of changed sections in that feature's doc overlay
+  // (added-section ids are already keys of sectionChanges, so this does not double-count).
+  const overlayResults = useQueries({
+    queries: features.map((f) => ({
+      queryKey: keys.featureDocOverlay(review, f.slug),
+      queryFn: () => api.featureDocOverlay(review, f.slug),
+      ...queryDefaults,
+    })),
+  });
+  const changeCounts = new Map<string, number>();
+  features.forEach((f, i) => {
+    const ov = overlayResults[i]?.data as FeatureDocOverlay | null | undefined;
+    if (ov) changeCounts.set(f.slug, Object.keys(ov.sectionChanges).length);
+  });
+
+  if (features.length === 0) {
+    return <div className="data-empty">No feature docs were generated for this PR</div>;
   }
 
-  // Manifests generated before flow classification existed have no direct/shared
-  // booleans — render those neutrally (no dimming, no chip) instead of asserting a
-  // false "0 direct · 0 shared" classification.
-  const classified = flows.some((f) => f.direct !== undefined || f.shared !== undefined);
-  const direct = classified ? flows.filter((f) => f.direct) : flows;
-  const rest = classified ? flows.filter((f) => !f.direct) : []; // shared-only, de-emphasized
+  const direct = features.filter((f) => f.direct);
+  const rest = features.filter((f) => !f.direct); // shared-only / untouched, de-emphasized
   const nDirect = direct.length;
-  const mShared = flows.filter((f) => f.shared && !f.direct).length;
+  const mShared = features.filter((f) => f.shared && !f.direct).length;
   const chipClass = nDirect <= 1 ? "flow-chip-ok" : "flow-chip-warn";
-  const selected = tileId.startsWith("flow:") ? tileId : null;
+  const selected = isFeatureId(tileId) ? tileId : null;
 
-  const select = (id: string) => {
-    prefetchTile(qc, review, id);
-    navigateTile(id);
+  const select = (slug: string) => {
+    prefetchFeatureDoc(qc, review, slug);
+    navigateTile(`feature:${slug}`);
   };
 
-  const flowButton = (f: { tileId: string; title: string; shared?: boolean }, dimmed: boolean) => {
-    const total = touchedTotal(overlayManifest, f.tileId);
+  const featureButton = (f: FeatureListItem, dimmed: boolean) => {
+    const id = `feature:${f.slug}`;
+    const count = changeCounts.get(f.slug);
     return (
       <button
-        key={f.tileId}
-        className={`view-tab ${selected === f.tileId ? "view-tab-active" : ""} ${dimmed ? "view-tab-dim" : ""}`}
-        onClick={() => select(f.tileId)}
+        key={f.slug}
+        className={`view-tab ${selected === id ? "view-tab-active" : ""} ${dimmed ? "view-tab-dim" : ""}`}
+        onClick={() => select(f.slug)}
         title={dimmed ? `${f.title} — changed only via shared dependencies` : f.title}
       >
-        {f.title.replace(/^Flow: /, "⇢ ")}
-        {total != null && <span className="crumb-badge">{total}</span>}
+        {f.title}
+        {count != null && count > 0 && <span className="crumb-badge">{count}</span>}
       </button>
     );
   };
@@ -146,25 +149,23 @@ function FlowsView({
     <div className="flows-view">
       <div className="flow-bar">
         <div className="flow-tabs">
-          {direct.map((f) => flowButton(f, false))}
-          {rest.map((f) => flowButton(f, true))}
+          {direct.map((f) => featureButton(f, false))}
+          {rest.map((f) => featureButton(f, true))}
         </div>
-        {classified && (
-          <span className={`flow-chip ${chipClass}`} title="A PR should be designed around one user flow.">
-            {nDirect} direct · {mShared} via shared deps
-          </span>
-        )}
+        <span className={`flow-chip ${chipClass}`} title="A PR should be designed around one feature.">
+          {nDirect} direct · {mShared} via shared deps
+        </span>
       </div>
       {selected ? (
         <div className="flow-diagram">
-          <DiagramPane review={review} />
+          <FeatureDocPane review={review} />
         </div>
       ) : (
         <div className="flow-overview">
-          <p className="muted">Select a flow to inspect its steps.</p>
+          <p className="muted">Select a feature to read its before/after documentation.</p>
           <div className="flow-overview-list">
-            {direct.map((f) => flowButton(f, false))}
-            {rest.map((f) => flowButton(f, true))}
+            {direct.map((f) => featureButton(f, false))}
+            {rest.map((f) => featureButton(f, true))}
           </div>
         </div>
       )}

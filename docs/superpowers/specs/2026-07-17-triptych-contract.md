@@ -8,11 +8,16 @@ interface contract between the pipeline work (packages/core) and the UI work (pa
 Left pane gets three fixed primary tabs, always visible per PR:
 
 1. **Folders** — the existing boxed drill-down structure map, unchanged.
-2. **Flows** — existing flow step-diagrams, reframed PR-first:
+2. **Flows** — **before/after feature documentation** (superseded the old step-diagram
+   graph; see `2026-07-20-flow-docs-design.md`). Each touched feature is a narrated doc
+   in the `platform/docs` house style (purpose → `At A Glance` ASCII → numbered steps),
+   describing how it worked before the PR with green=Added / amber=Changed / ghost=Removed
+   callouts for the change. Split-screen: doc outline left, per-section detail (what
+   changed + real diff hunks) right.
    - Chip in the Flows tab bar: `N direct · M via shared deps`; green when N ≤ 1, amber when N > 1.
-   - DIRECT = a PR-changed file is cited by one of the flow's extracted steps.
-   - SHARED = a PR-changed file is in the flow's reachable set but cited by no step.
-   - Default-open the direct flow when exactly one exists; otherwise show the flow list.
+   - DIRECT = a PR-changed file backs a documented section of the feature.
+   - SHARED = a PR-changed file is in the feature's reachable set but backs no section.
+   - Default-open the direct feature when exactly one exists; otherwise show the feature list.
 3. **Data** — NEW. Entity cards with field-level PR diffs. Truthful empty states:
    - `status: "none"` → "No data changes in this PR" (entities still browsable)
    - `status: "unsupported"` → "Data analysis unavailable for this repo"
@@ -81,10 +86,13 @@ ADD|DROP|ALTER COLUMN / RENAME; `table` name-matched against entities when possi
 
 ### 3. Manifest extension (`manifest.json`)
 
-`flows: [{ tileId, title, direct: boolean, shared: boolean }]` — pipeline classifies each flow
-against the PR's changed files (spec.reachable + step citations). NOTE: manifest lives under
-the base-analysis prefix but flow classification is PR-relative — acceptable because an
-analysis run is per-PR today (revisit when base analyses are shared).
+The per-PR feature list lives on the **overlay manifest** (PR prefix), not the base
+`manifest.json`: `features: [{ slug, title, direct: boolean, shared: boolean }]`. This
+fixes the earlier wart where PR-relative flow classification was written under the
+base-analysis prefix — the base narrative (`docs/feature:<slug>.json`) is now an
+additive, PR-independent cache, and everything PR-relative (the feature list plus each
+feature's change overlay) is keyed by `(prNumber, headSha)`. `AnalysisManifest.flows` is
+retained but deprecated (always `[]`).
 
 ## UI contract
 

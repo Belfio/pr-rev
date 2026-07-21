@@ -1,7 +1,7 @@
 import { useState } from "react";
 import Markdown from "react-markdown";
 import { useQuery } from "@tanstack/react-query";
-import { api, keys, queryDefaults } from "../lib/api";
+import { api, keys, queryDefaults, isFeatureId, featureSlug, mergeDocSections } from "../lib/api";
 import type { Review, DataArtifact, DataEntity, DataOverlay } from "../lib/api";
 import { useUi } from "../state/store";
 import { DiffView } from "./DiffView";
@@ -12,6 +12,7 @@ import { useDataArtifacts, entityOverlayFor, mergeFields } from "./DataPane";
 export function TextPane({ review }: { review: Review }) {
   const [tab, setTab] = useState<"review" | "conversation">("review");
   const { view, tileId, selectedNodeId } = useUi();
+  const isFeature = isFeatureId(tileId);
   const metaQ = useQuery({
     queryKey: keys.prMeta(review),
     queryFn: () => api.prMeta(review),
@@ -19,10 +20,12 @@ export function TextPane({ review }: { review: Review }) {
     gcTime: 5 * 60 * 1000,
   });
 
-  const tileQ = useQuery({ queryKey: keys.tile(review, tileId), queryFn: () => api.tile(review, tileId), ...queryDefaults });
-  const tileMdQ = useQuery({ queryKey: keys.tileMd(review, tileId), queryFn: () => api.tileMd(review, tileId), ...queryDefaults });
-  const overlayQ = useQuery({ queryKey: keys.overlay(review, tileId), queryFn: () => api.overlay(review, tileId), ...queryDefaults });
-  const overlayMdQ = useQuery({ queryKey: keys.overlayMd(review, tileId), queryFn: () => api.overlayMd(review, tileId), ...queryDefaults });
+  // Feature ids have no tile/overlay artifacts and these fetchers throw on 404 — gate
+  // them off for features (the feature branch renders from featureDoc + doc overlay).
+  const tileQ = useQuery({ queryKey: keys.tile(review, tileId), queryFn: () => api.tile(review, tileId), enabled: !isFeature, ...queryDefaults });
+  const tileMdQ = useQuery({ queryKey: keys.tileMd(review, tileId), queryFn: () => api.tileMd(review, tileId), enabled: !isFeature, ...queryDefaults });
+  const overlayQ = useQuery({ queryKey: keys.overlay(review, tileId), queryFn: () => api.overlay(review, tileId), enabled: !isFeature, ...queryDefaults });
+  const overlayMdQ = useQuery({ queryKey: keys.overlayMd(review, tileId), queryFn: () => api.overlayMd(review, tileId), enabled: !isFeature, ...queryDefaults });
   const prSummaryQ = useQuery({ queryKey: keys.prSummary(review), queryFn: () => api.prSummary(review), ...queryDefaults });
 
   const tile = tileQ.data;
@@ -55,6 +58,13 @@ export function TextPane({ review }: { review: Review }) {
         <>
           <div className="text-scroll">
             <DataReview review={review} />
+          </div>
+          <Chat review={review} />
+        </>
+      ) : isFeature ? (
+        <>
+          <div className="text-scroll">
+            <FeatureReview review={review} />
           </div>
           <Chat review={review} />
         </>
@@ -115,6 +125,102 @@ export function TextPane({ review }: { review: Review }) {
         </>
       )}
     </div>
+  );
+}
+
+// Right-pane detail for a selected feature (Flows tab). A selected section shows its
+// change narrative, files, and diffs; with nothing selected we show the doc summary and
+// a per-section change index (replacing the old per-tile "About this view" markdown).
+function FeatureReview({ review }: { review: Review }) {
+  const { tileId, selectedNodeId } = useUi();
+  const slug = featureSlug(tileId);
+
+  const docQ = useQuery({
+    queryKey: keys.featureDoc(review, slug),
+    queryFn: () => api.featureDoc(review, slug),
+    ...queryDefaults,
+  });
+  const overlayQ = useQuery({
+    queryKey: keys.featureDocOverlay(review, slug),
+    queryFn: () => api.featureDocOverlay(review, slug),
+    ...queryDefaults,
+  });
+
+  const doc = docQ.data ?? null;
+  const overlay = overlayQ.data ?? null;
+  const sections = mergeDocSections(doc, overlay);
+  const changes = overlay?.sectionChanges ?? {};
+
+  if (docQ.isLoading) return <p className="muted">loading…</p>;
+  if (!doc) return <p className="muted">Feature doc unavailable.</p>;
+
+  const selected = selectedNodeId != null ? sections.find((s) => s.id === selectedNodeId) ?? null : null;
+
+  if (selected) {
+    const change = changes[selected.id];
+    return (
+      <section className="text-section">
+        <h2 className="section-title">
+          {selected.heading}
+          {change && <span className={`badge badge-${change.change}`}>{change.change}</span>}
+        </h2>
+        {selected.overview && (
+          <div className="node-summary">
+            <Markdown>{selected.overview}</Markdown>
+          </div>
+        )}
+        {selected.importantDetail && (
+          <p className="change-summary">
+            <strong>Important detail:</strong> {selected.importantDetail}
+          </p>
+        )}
+        {change?.changeNarrative && (
+          <p className="change-summary">
+            <strong>What changed:</strong> {change.changeNarrative}
+          </p>
+        )}
+        {selected.files.length > 0 && (
+          <p className="anchors">
+            {selected.files.map((f) => (
+              <code key={f}>{f}</code>
+            ))}
+          </p>
+        )}
+        {(change?.hunkRefs ?? []).map((h) => (
+          <DiffView key={h.patchUri} review={review} hunkRef={h} />
+        ))}
+        {change && change.hunkRefs.length === 0 && (
+          <p className="muted">Changed in this PR — no line-level diff attributed to this section.</p>
+        )}
+        {!change && <p className="muted">Unchanged in this PR.</p>}
+      </section>
+    );
+  }
+
+  return (
+    <>
+      <section className="text-section">
+        <h2 className="section-title">{doc.title}</h2>
+        {doc.summary ? <Markdown>{doc.summary}</Markdown> : <p className="muted">Select a section for detail.</p>}
+      </section>
+      <section className="text-section">
+        <h2 className="section-title">Sections changed in this PR</h2>
+        {Object.keys(changes).length === 0 ? (
+          <p className="muted">No sections of this feature changed in this PR.</p>
+        ) : (
+          <ul className="feature-change-index">
+            {sections
+              .filter((s) => changes[s.id])
+              .map((s) => (
+                <li key={s.id}>
+                  <span className={`badge badge-${changes[s.id]!.change}`}>{changes[s.id]!.change}</span>{" "}
+                  {s.heading}
+                </li>
+              ))}
+          </ul>
+        )}
+      </section>
+    </>
   );
 }
 

@@ -106,6 +106,19 @@ export const OverlayManifest = z.object({
       }),
     }),
   ),
+  // Per-PR feature list (docs touched by this PR). Lives in the PR prefix so the
+  // base analysis prefix stays PR-agnostic. `direct` = a changed file is cited by a
+  // doc section; `shared` = a changed file is only reachable, not cited.
+  features: z
+    .array(
+      z.object({
+        slug: z.string(),
+        title: z.string(),
+        direct: z.boolean(),
+        shared: z.boolean(),
+      }),
+    )
+    .default([]),
   summaryUri: z.string(),
 });
 
@@ -114,6 +127,9 @@ export const AnalysisManifest = z.object({
   repo: z.object({ owner: z.string(), name: z.string(), commitSha: z.string() }),
   rootTileId: z.string(),
   tileIds: z.array(z.string()),
+  // @deprecated Flows are now before/after feature docs (see FeatureDoc); the
+  // per-PR feature list lives on OverlayManifest.features. Kept so old on-disk
+  // manifests still parse — the pipeline no longer WRITES this field.
   flows: z
     .array(
       z.object({
@@ -130,6 +146,49 @@ export const AnalysisManifest = z.object({
     unresolvedImports: z.number().int(),
   }),
   generatedAt: z.string(),
+});
+
+// --- Feature docs (PR triptych "Flows" pane: before/after documentation) -----
+
+// Base narrative — merge-base state of one feature, no PR annotations. Reusable
+// across PRs of the same merge-base (additive cache in the analysis prefix).
+export const DocSection = z.object({
+  id: z.string(), // stable slug within the doc (fixed across PRs at the same base)
+  ordinal: z.number().int(),
+  heading: z.string(),
+  files: z.array(z.string()), // validated against graph ∪ PR files (see attribution)
+  overview: z.string(), // "What happens" markdown (may be empty)
+  importantDetail: z.string(), // callout (may be empty)
+});
+
+export const FeatureDoc = z.object({
+  slug: z.string(), // stable, from entrypoint (e.g. "src.app.shop.page")
+  title: z.string(),
+  purpose: z.string(), // one-line
+  atAGlance: z.string(), // ASCII diagram, rendered in <pre> (may be empty)
+  coreModel: z.array(z.string()), // invariant bullets (may be empty)
+  sections: z.array(DocSection),
+  summary: z.string(), // recap (may be empty)
+  // Provenance for the additive cache: "skeleton" docs (from --skip-llm) carry empty
+  // prose and MUST be upgradable by a later full run; "llm" docs are never overwritten
+  // (preserves section-id stability across real runs). Skeleton→llm is a one-way ratchet.
+  generator: z.enum(["skeleton", "llm"]),
+});
+
+// PR change layer for one feature doc — keyed by prNumber/headSha in the PR prefix.
+export const FeatureDocSectionChange = z.object({
+  change: z.enum(["added", "changed", "removed"]),
+  changeNarrative: z.string(), // before → after prose (may be empty)
+  files: z.array(z.string()),
+  hunkRefs: z.array(HunkRef), // reuse tile HunkRef so DiffView gets patchUri directly
+});
+
+export const FeatureDocOverlay = z.object({
+  slug: z.string(),
+  // sectionId -> change; sections absent here render unchanged. Keys may reference
+  // base doc sections OR addedSections ids.
+  sectionChanges: z.record(FeatureDocSectionChange),
+  addedSections: z.array(DocSection), // net-new sections (from PR-added files)
 });
 
 // --- Data artifact (PR triptych "Data" pane) ---------------------------------
@@ -203,6 +262,10 @@ export type OverlayNode = z.infer<typeof OverlayNode>;
 export type TileOverlay = z.infer<typeof TileOverlay>;
 export type OverlayManifest = z.infer<typeof OverlayManifest>;
 export type AnalysisManifest = z.infer<typeof AnalysisManifest>;
+export type DocSection = z.infer<typeof DocSection>;
+export type FeatureDoc = z.infer<typeof FeatureDoc>;
+export type FeatureDocSectionChange = z.infer<typeof FeatureDocSectionChange>;
+export type FeatureDocOverlay = z.infer<typeof FeatureDocOverlay>;
 export type DataField = z.infer<typeof DataField>;
 export type DataEntity = z.infer<typeof DataEntity>;
 export type DataEdge = z.infer<typeof DataEdge>;
@@ -215,6 +278,16 @@ export type DataOverlay = z.infer<typeof DataOverlay>;
 /** "root/packages.api/handlers" -> "root__packages.api__handlers" */
 export function tileFileName(tileId: string): string {
   return tileId.replaceAll("/", "__");
+}
+
+/**
+ * Filename stem for a feature doc / doc overlay: "feature:<slug>" with the same
+ * "/"→"__" escaping used for tiles (so `feature:` files sit beside `flow:`-style
+ * names consistently). Base doc: analysis/{owner}/{repo}/{baseSha}/docs/<stem>.json;
+ * doc overlay: pr/{owner}/{repo}/{n}/{headSha}/overlays/<stem>.json.
+ */
+export function featureFileName(slug: string): string {
+  return tileFileName(`feature:${slug}`);
 }
 
 export function analysisPrefix(owner: string, repo: string, baseSha: string): string {

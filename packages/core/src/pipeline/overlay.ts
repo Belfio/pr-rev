@@ -32,6 +32,28 @@ export interface OverlayBuild {
   patches: Map<string, string>; // escaped filename -> patch text
 }
 
+/**
+ * The PR's changes to one file as a single HunkRef (spanning all its hunks),
+ * pointing at the on-disk patch. Shared with the feature-doc pipeline so doc
+ * section changes reference the exact same patch files as tile overlays.
+ */
+export function hunkRefFor(f: PrFile): HunkRef[] {
+  if (!f.patch) return [];
+  const hunks = parseHunks(f.patch);
+  if (hunks.length === 0) return [];
+  const first = hunks[0]!;
+  const last = hunks[hunks.length - 1]!;
+  return [
+    {
+      file: f.filename,
+      patchUri: `patches/${escapePath(f.filename)}.patch`,
+      hunkIndices: hunks.map((_, i) => i),
+      oldRange: [first.oldStart, last.oldStart + last.oldLines],
+      newRange: [first.newStart, last.newStart + last.newLines],
+    },
+  ];
+}
+
 type Status = "added" | "modified" | "removed" | "renamed";
 
 function normalizeStatus(s: PrFile["status"]): Status | null {
@@ -48,11 +70,7 @@ function tileAncestry(tileId: string): string[] {
   return parts.map((_, i) => parts.slice(0, i + 1).join("/"));
 }
 
-export function buildOverlay(
-  pr: PrInfo,
-  build: TileBuild,
-  flowMembership?: Map<string, { tileId: string; nodeId: string }[]>,
-): OverlayBuild {
+export function buildOverlay(pr: PrInfo, build: TileBuild): OverlayBuild {
   const overlays = new Map<string, TileOverlay>();
   const patches = new Map<string, string>();
   const counts = new Map<string, { added: number; modified: number; removed: number }>();
@@ -79,24 +97,7 @@ export function buildOverlay(
     }
   };
 
-  const hunkRefFor = (f: PrFile): HunkRef[] => {
-    if (!f.patch) return [];
-    const hunks = parseHunks(f.patch);
-    if (hunks.length === 0) return [];
-    const first = hunks[0]!;
-    const last = hunks[hunks.length - 1]!;
-    return [
-      {
-        file: f.filename,
-        patchUri: `patches/${escapePath(f.filename)}.patch`,
-        hunkIndices: hunks.map((_, i) => i),
-        oldRange: [first.oldStart, last.oldStart + last.oldLines],
-        newRange: [first.newStart, last.newStart + last.newLines],
-      },
-    ];
-  };
-
-  const setNode = (tileId: string, nodeId: string, patch: Partial<OverlayNode> & { status: Status }) => {
+  const setNode =(tileId: string, nodeId: string, patch: Partial<OverlayNode> & { status: Status }) => {
     const o = overlay(tileId);
     const existing = o.nodes[nodeId];
     if (existing) {
@@ -118,17 +119,7 @@ export function buildOverlay(
     if (!status) continue;
     if (f.patch) patches.set(escapePath(f.filename), f.patch);
 
-    // flow tiles: mark the file's node in every flow that traverses it
-    const flowEntries = flowMembership?.get(
-      status === "renamed" && f.previousFilename ? f.previousFilename : f.filename,
-    );
-    for (const { tileId, nodeId } of flowEntries ?? []) {
-      if (status === "removed") overlay(tileId).removedNodeIds.push(nodeId);
-      else setNode(tileId, nodeId, { status, hunkRefs: hunkRefFor(f) });
-      bump(tileId, status);
-    }
-
-    const lookupPath = status === "renamed" && f.previousFilename ? f.previousFilename : f.filename;
+    const lookupPath =status === "renamed" && f.previousFilename ? f.previousFilename : f.filename;
     const entries = build.fileToNodes.get(lookupPath);
 
     if (entries && entries.length > 0) {
@@ -207,6 +198,7 @@ export function buildOverlay(
         url: pr.url,
       },
       touchedTiles,
+      features: [], // populated by the feature-doc pipeline (run.ts)
       summaryUri: "overlays/pr-summary.md",
     },
     overlays,

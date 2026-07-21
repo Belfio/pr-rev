@@ -12,10 +12,13 @@ The left pane has three views of the same PR:
 - **Folders** — a drill-down structure map of the repo (modules → directories → files).
   Double-click a node to descend, breadcrumbs to go back up. Added nodes are green, modified
   amber, removed ghosted.
-- **Flows** — the PR's behavior as UX/algorithm step diagrams traced from entrypoints. A
-  focused PR ideally touches a *single* flow; the Flows tab makes that legible — it shows
-  `N direct · M via shared deps` and turns green when one flow is directly changed, amber
-  when the change fans out across several.
+- **Flows** — before/after **feature documentation**. For each feature the PR touches, an
+  LLM writes a doc in the spirit of a hand-maintained `docs/` folder — a one-line purpose,
+  an "At a glance" ASCII diagram, and numbered steps with file paths — narrating how the
+  feature worked *before* the PR with green=Added / amber=Changed / ghost=Removed callouts
+  for what changes. Click any section to see the change detail and the real diff on the
+  right. A focused PR ideally touches a *single* feature; the tab shows `N direct · M via
+  shared deps` and turns green when one feature is directly changed, amber when it fans out.
 - **Data** — entity cards (types, DB schema, enums) with field-level diffs for the PR. It is
   honest about coverage: repos with no discoverable schema say so rather than inventing one.
 

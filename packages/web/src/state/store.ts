@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type { Review } from "../lib/api";
+import { isFeatureId } from "../lib/api";
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -44,13 +45,14 @@ export const useUi = create<UiState>((set) => ({
   // that don't belong to the destination (node selection is per-diagram; entity
   // selection only exists inside Data).
   setView: (view) => set((s) => ({ view, selectedNodeId: null, selectedEntityId: view === "data" ? s.selectedEntityId : null })),
-  // navigating from a flow step into a structure tile is a view change: the Flows tab
-  // only renders flow tiles, so land the user in Folders where the target tile lives.
+  // The Flows tab renders feature docs (feature:<slug> ids); navigating to a structure
+  // tile from there is a view change, so land the user in Folders where that tile lives.
+  // Feature ids must stay in Flows (deep links + selecting a feature both go through here).
   navigateTile: (tileId) =>
     set((s) => ({
       tileId,
       selectedNodeId: null,
-      view: s.view === "flows" && !tileId.startsWith("flow:") ? "folders" : s.view,
+      view: s.view === "flows" && !isFeatureId(tileId) ? "folders" : s.view,
     })),
   selectNode: (selectedNodeId) => set({ selectedNodeId }),
   selectEntity: (selectedEntityId) => set({ selectedEntityId }),

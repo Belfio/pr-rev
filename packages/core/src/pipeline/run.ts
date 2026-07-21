@@ -1,10 +1,17 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, writeFile, readFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
 import path from "node:path";
 import { resolvePr, cloneAtSha } from "./github.js";
 import { scanImports } from "./imports.js";
 import { buildDirTree, buildTiles } from "./tiles.js";
-import { buildFlowSpecs, assembleExtractedFlow, assembleFallbackFlow } from "./flows.js";
-import { extractFlow } from "../llm/flow-extract.js";
+import { buildFlowSpecs, attributeDiffs } from "./flows.js";
+import {
+  generateFeatureDoc,
+  generateFeatureDocOverlay,
+  buildSkeletonFeatureDoc,
+  classifyFeature,
+  type FeatureResult,
+} from "../llm/flow-doc.js";
 import { layoutTile } from "./layout.js";
 import { buildOverlay } from "./overlay.js";
 import { buildData } from "./data.js";
@@ -14,10 +21,14 @@ import {
   Tile as TileSchema,
   DataArtifact as DataArtifactSchema,
   DataOverlay as DataOverlaySchema,
+  FeatureDoc as FeatureDocSchema,
+  FeatureDocOverlay as FeatureDocOverlaySchema,
   analysisPrefix,
   prPrefix,
   tileFileName,
+  featureFileName,
   type AnalysisManifest,
+  type FeatureDoc,
 } from "../schemas.js";
 
 export interface AnalyzeOptions {
@@ -62,56 +73,93 @@ export async function analyze(opts: AnalyzeOptions): Promise<void> {
   const changedFiles = new Set(pr.files.map((f) => f.filename));
   const specs = buildFlowSpecs(graph, changedFiles);
 
-  log(`Extracting ${specs.length} flows${opts.skipLlm ? " (deterministic fallback)" : " (LLM, from source)"}...`);
-  const assembled = await pMap(
-    specs,
-    async (spec) => {
-      if (!opts.skipLlm) {
-        try {
-          const extracted = await extractFlow(llm, repoDir, spec.entry, spec.reachable, spec.title);
-          if (extracted) return assembleExtractedFlow(spec, extracted, build, repoMeta, coverage);
-          log(`  ! flow ${spec.title}: extraction invalid, using dependency fallback`);
-        } catch (e) {
-          log(`  ! flow ${spec.title}: ${(e as Error).message} — using dependency fallback`);
-        }
-      }
-      return assembleFallbackFlow(spec, graph, build, changedFiles, repoMeta, coverage);
-    },
-    opts.concurrency ?? 6,
-  );
-  build.tiles.push(...assembled.map((a) => a.tile));
-  const flowMembership = new Map<string, { tileId: string; nodeId: string }[]>();
-  for (const a of assembled) {
-    for (const m of a.membership) {
-      if (!flowMembership.has(m.file)) flowMembership.set(m.file, []);
-      flowMembership.get(m.file)!.push({ tileId: m.tileId, nodeId: m.nodeId });
-    }
-  }
-  // Per-flow PR classification: DIRECT = a changed file is cited by a step of the flow;
-  // SHARED = a changed file is in the flow's reachable set but cited by no step.
-  const citedByTile = new Map<string, Set<string>>();
-  for (const a of assembled) {
-    const set = citedByTile.get(a.tile.tileId) ?? new Set<string>();
-    for (const m of a.membership) set.add(m.file);
-    citedByTile.set(a.tile.tileId, set);
-  }
-  const flowList = specs.map((s) => {
-    const cited = citedByTile.get(s.tileId) ?? new Set<string>();
-    const direct = s.reachable.some((f) => changedFiles.has(f) && cited.has(f));
-    const shared = s.reachable.some((f) => changedFiles.has(f) && !cited.has(f));
-    return { tileId: s.tileId, title: s.title, direct, shared };
-  });
-  const flowExplanations = new Map(
-    assembled.filter((a) => a.explanation).map((a) => [a.tile.tileId, a.explanation!]),
-  );
-  log(`  ${build.tiles.length} tiles (${assembled.length} flows, ${assembled.filter((a) => a.extracted).length} LLM-extracted)`);
-
   log("Computing layouts (ELK)...");
   for (const tile of build.tiles) await layoutTile(tile);
 
   log("Building PR overlay...");
-  const overlayBuild = buildOverlay(pr, build, flowMembership);
+  const overlayBuild = buildOverlay(pr, build);
   log(`  ${overlayBuild.overlays.size} touched tiles`);
+
+  // --- Feature docs (before/after documentation, replaces flow diagrams) ---
+  // Validation set for dropping hallucinated paths: the static graph plus all PR
+  // filenames (added files are never in the merge-base graph).
+  const validFiles = new Set<string>(graph.files);
+  for (const f of pr.files) {
+    validFiles.add(f.filename);
+    if (f.previousFilename) validFiles.add(f.previousFilename);
+  }
+  const baseDocsDir = path.join(
+    opts.artifactsDir,
+    analysisPrefix(opts.owner, opts.repo, pr.mergeBaseSha),
+    "docs",
+  );
+  const readCachedBaseDoc = async (slug: string): Promise<FeatureDoc | null> => {
+    const p = path.join(baseDocsDir, `${featureFileName(slug)}.json`);
+    if (!existsSync(p)) return null;
+    try {
+      return FeatureDocSchema.parse(JSON.parse(await readFile(p, "utf8")));
+    } catch {
+      return null; // stale/invalid cache: regenerate
+    }
+  };
+
+  log(`Generating ${specs.length} feature docs${opts.skipLlm ? " (deterministic skeleton)" : " (LLM, from source + diffs)"}...`);
+  const featureResults = await pMap(
+    specs,
+    async (spec): Promise<FeatureResult> => {
+      const attributed = attributeDiffs(spec, pr.files);
+      const existingBase = await readCachedBaseDoc(spec.slug);
+
+      const skeleton = (): FeatureResult => {
+        const { doc, baseDocToWrite, overlay } = buildSkeletonFeatureDoc(
+          spec,
+          attributed,
+          validFiles,
+          existingBase,
+        );
+        const { direct, shared } = classifyFeature(spec, doc, overlay, attributed);
+        return { slug: spec.slug, title: doc.title, baseDocToWrite, doc, overlay, direct, shared };
+      };
+
+      // --skip-llm never generates prose: reuse a cached base doc as-is (any
+      // generator — never downgrade an llm doc), else write a skeleton.
+      if (opts.skipLlm) return skeleton();
+
+      // A cached base doc is a hit (→ overlay-only) ONLY when it's an llm doc.
+      // A missing or skeleton base doc runs FULL mode and (re)writes the base — the
+      // single allowed overwrite: the one-way skeleton→llm upgrade.
+      const cachedLlm = existingBase?.generator === "llm";
+      try {
+        if (cachedLlm) {
+          log(`  · feature ${spec.title}: cached llm base doc — overlay-only mode`);
+          const overlay = await generateFeatureDocOverlay(llm, existingBase!, spec, attributed, validFiles);
+          if (overlay) {
+            const { direct, shared } = classifyFeature(spec, existingBase!, overlay, attributed);
+            return { slug: spec.slug, title: existingBase!.title, baseDocToWrite: null, doc: existingBase!, overlay, direct, shared };
+          }
+        } else {
+          log(`  · feature ${spec.title}: ${existingBase ? "upgrading skeleton base doc" : "new base doc"} — full mode`);
+          const full = await generateFeatureDoc(llm, repoDir, spec, attributed, validFiles);
+          if (full) {
+            const { direct, shared } = classifyFeature(spec, full.doc, full.overlay, attributed);
+            return { slug: spec.slug, title: full.doc.title, baseDocToWrite: full.doc, doc: full.doc, overlay: full.overlay, direct, shared };
+          }
+        }
+        log(`  ! feature ${spec.title}: generation invalid, using skeleton`);
+      } catch (e) {
+        log(`  ! feature ${spec.title}: ${(e as Error).message} — using skeleton`);
+      }
+      return skeleton();
+    },
+    opts.concurrency ?? 6,
+  );
+  overlayBuild.manifest.features = featureResults.map((r) => ({
+    slug: r.slug,
+    title: r.title,
+    direct: r.direct,
+    shared: r.shared,
+  }));
+  log(`  ${featureResults.length} feature docs (${featureResults.filter((r) => r.baseDocToWrite).length} new base docs)`);
 
   log("Building Data artifact (schema entities + PR overlay)...");
   const data = await buildData({
@@ -135,11 +183,6 @@ export async function analyze(opts: AnalyzeOptions): Promise<void> {
     await pMap(
       build.tiles,
       async (tile) => {
-        // extracted flow tiles already carry their step narrative from extraction
-        if (flowExplanations.has(tile.tileId)) {
-          explanations.set(tile.tileId, flowExplanations.get(tile.tileId)!);
-          return;
-        }
         try {
           explanations.set(tile.tileId, await decorateTile(llm, tile));
         } catch (e) {
@@ -184,6 +227,7 @@ export async function analyze(opts: AnalyzeOptions): Promise<void> {
   const pPrefix = path.join(opts.artifactsDir, prPrefix(opts.owner, opts.repo, pr.number, pr.headSha));
   await mkdir(path.join(aPrefix, "tiles"), { recursive: true });
   await mkdir(path.join(aPrefix, "index"), { recursive: true });
+  await mkdir(path.join(aPrefix, "docs"), { recursive: true });
   await mkdir(path.join(pPrefix, "overlays"), { recursive: true });
   await mkdir(path.join(pPrefix, "patches"), { recursive: true });
 
@@ -215,6 +259,28 @@ export async function analyze(opts: AnalyzeOptions): Promise<void> {
     if (md) await writeFile(path.join(pPrefix, "overlays", `${tileFileName(overlay.tileId)}.md`), md);
   }
   await writeFile(path.join(pPrefix, "overlays", "pr-summary.md"), prSummary);
+
+  // Feature docs: base doc is an ADDITIVE cache (write only missing slugs, never
+  // overwrite a base doc from an earlier PR at the same merge-base); the doc
+  // overlay is per-PR and always written.
+  for (const r of featureResults) {
+    // baseDocToWrite is set only for a brand-new base doc or a skeleton→llm upgrade;
+    // it is null for overlay-only (cached llm) and for --skip-llm reusing a cached doc.
+    // So writing whenever it is set preserves additivity AND performs the one allowed
+    // overwrite (the upgrade) — an llm doc is never written over.
+    if (r.baseDocToWrite) {
+      FeatureDocSchema.parse(r.baseDocToWrite);
+      await writeFile(
+        path.join(aPrefix, "docs", `${featureFileName(r.slug)}.json`),
+        JSON.stringify(r.baseDocToWrite),
+      );
+    }
+    FeatureDocOverlaySchema.parse(r.overlay);
+    await writeFile(
+      path.join(pPrefix, "overlays", `${featureFileName(r.slug)}.json`),
+      JSON.stringify(r.overlay),
+    );
+  }
   await writeFile(path.join(pPrefix, "overlay-manifest.json"), JSON.stringify(overlayBuild.manifest, null, 2));
 
   // Data artifacts (validate against the contract schemas before publishing)
@@ -228,7 +294,7 @@ export async function analyze(opts: AnalyzeOptions): Promise<void> {
     repo: repoMeta,
     rootTileId: build.rootTileId,
     tileIds: build.tiles.map((t) => t.tileId),
-    flows: flowList,
+    flows: [], // deprecated: feature list moved to OverlayManifest.features
     coverage,
     generatedAt: new Date().toISOString(),
   };
